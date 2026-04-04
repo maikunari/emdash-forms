@@ -1,0 +1,43 @@
+{
+  "name": "emdash-forms",
+  "version": "0.1.0",
+  "description": "Best-in-class forms plugin for EmDash — Gravity Forms for the modern stack",
+  "type": "module",
+  "license": "MIT",
+  "author": "maikunari",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maikunari/emdash-forms"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./astro": {
+      "import": "./dist/astro/EmDashForm.astro"
+    }
+  },
+  "files": [
+    "dist",
+    "src/astro"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "keywords": [
+    "emdash",
+    "forms",
+    "plugin",
+    "cms",
+    "cloudflare",
+    "d1"
+  ]
+}

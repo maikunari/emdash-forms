@@ -1,0 +1,411 @@
+---
+/**
+ * EmDash Forms — Astro component
+ *
+ * Usage:
+ *   <EmDashForm slug="contact" />
+ *   <EmDashForm slug="contact" action="https://yoursite.com/api/plugins/emdash-forms/submit/contact" />
+ *
+ * Theming — override CSS custom properties:
+ *   <EmDashForm slug="contact" class="my-form" />
+ *   .my-form { --fw-accent: #2563eb; }
+ */
+
+interface Props {
+  /** Form slug matching the form created in the admin panel */
+  slug: string;
+  /** Override the submit endpoint URL */
+  action?: string;
+  /** Cloudflare Turnstile site key (enables spam protection) */
+  turnstileSiteKey?: string;
+  /** Additional CSS class names */
+  class?: string;
+}
+
+const {
+  slug,
+  action,
+  turnstileSiteKey,
+  class: className,
+} = Astro.props;
+
+const endpoint = action || `/api/plugins/emdash-forms/submit/${slug}`;
+---
+
+<emdash-form
+  data-slug={slug}
+  data-action={endpoint}
+  data-turnstile-key={turnstileSiteKey || ""}
+  class:list={["emdash-form", className]}
+>
+  <form method="POST" action={endpoint} class="ef-form">
+    <div class="ef-fields">
+      <!-- Fields are hydrated client-side from the form config -->
+      <noscript>
+        <p class="ef-noscript">This form requires JavaScript to load.</p>
+      </noscript>
+      <div class="ef-loading">Loading form...</div>
+    </div>
+
+    {turnstileSiteKey && (
+      <div class="cf-turnstile" data-sitekey={turnstileSiteKey}></div>
+    )}
+
+    <div class="ef-actions">
+      <button type="submit" class="ef-submit" disabled>
+        Submit
+      </button>
+    </div>
+
+    <div class="ef-message" role="status" aria-live="polite"></div>
+  </form>
+</emdash-form>
+
+{turnstileSiteKey && (
+  <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+)}
+
+<script>
+  class EmDashFormElement extends HTMLElement {
+    connectedCallback() {
+      const slug = this.dataset.slug!;
+      const action = this.dataset.action!;
+      const form = this.querySelector<HTMLFormElement>(".ef-form")!;
+      const fieldsContainer = this.querySelector<HTMLDivElement>(".ef-fields")!;
+      const submitBtn = this.querySelector<HTMLButtonElement>(".ef-submit")!;
+      const messageEl = this.querySelector<HTMLDivElement>(".ef-message")!;
+
+      // Load form config
+      fetch(`/api/plugins/emdash-forms/forms`)
+        .then((r) => r.json())
+        .then((data: { forms: Array<{ slug: string; config: string; settings: string }> }) => {
+          const formDef = data.forms.find(
+            (f: { slug: string }) => f.slug === slug
+          );
+          if (!formDef) {
+            fieldsContainer.innerHTML =
+              '<p class="ef-error-text">Form not found.</p>';
+            return;
+          }
+
+          const config =
+            typeof formDef.config === "string"
+              ? JSON.parse(formDef.config)
+              : formDef.config;
+          const settings =
+            typeof formDef.settings === "string"
+              ? JSON.parse(formDef.settings)
+              : formDef.settings;
+
+          const fields = config.fields || (config.steps || []).flatMap((s: { fields: unknown[] }) => s.fields);
+
+          fieldsContainer.innerHTML = fields
+            .map((field: { type: string; id: string; label: string; required?: boolean; placeholder?: string; rows?: number; options?: Array<{ label: string; value: string }>; inputType?: string; accept?: string[] }) =>
+              renderField(field)
+            )
+            .join("");
+
+          submitBtn.textContent = settings.submitLabel || "Submit";
+          submitBtn.disabled = false;
+        })
+        .catch(() => {
+          fieldsContainer.innerHTML =
+            '<p class="ef-error-text">Failed to load form.</p>';
+        });
+
+      // Handle submit
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Sending...";
+        messageEl.textContent = "";
+        messageEl.className = "ef-message";
+
+        const formData = new FormData(form);
+        const body: Record<string, unknown> = {};
+        formData.forEach((value, key) => {
+          if (body[key]) {
+            if (Array.isArray(body[key])) {
+              (body[key] as unknown[]).push(value);
+            } else {
+              body[key] = [body[key], value];
+            }
+          } else {
+            body[key] = value;
+          }
+        });
+
+        try {
+          const res = await fetch(action, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+
+          const result = await res.json() as { success?: boolean; message?: string; redirect?: string; error?: string; errors?: string[] };
+
+          if (result.success) {
+            messageEl.textContent = result.message || "Submitted successfully.";
+            messageEl.classList.add("ef-message--success");
+            form.reset();
+            if (result.redirect) {
+              window.location.href = result.redirect;
+            }
+          } else {
+            const errorMsg =
+              result.errors?.join(", ") || result.error || "Submission failed.";
+            messageEl.textContent = errorMsg;
+            messageEl.classList.add("ef-message--error");
+          }
+        } catch {
+          messageEl.textContent = "Network error. Please try again.";
+          messageEl.classList.add("ef-message--error");
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Submit";
+        }
+      });
+    }
+  }
+
+  function renderField(field: { type: string; id: string; label: string; required?: boolean; placeholder?: string; rows?: number; options?: Array<{ label: string; value: string }>; inputType?: string; accept?: string[] }): string {
+    const req = field.required ? ' required' : "";
+    const ph = field.placeholder ? ` placeholder="${escapeAttr(field.placeholder)}"` : "";
+    const label = `<label class="ef-label" for="ef-${field.id}">${escapeHtml(field.label)}${field.required ? ' <span class="ef-required">*</span>' : ""}</label>`;
+
+    switch (field.type) {
+      case "text_input":
+        return `<div class="ef-field">${label}<input type="${field.inputType || "text"}" id="ef-${field.id}" name="${field.id}" class="ef-input"${ph}${req}></div>`;
+      case "email":
+        return `<div class="ef-field">${label}<input type="email" id="ef-${field.id}" name="${field.id}" class="ef-input"${ph}${req}></div>`;
+      case "phone":
+        return `<div class="ef-field">${label}<input type="tel" id="ef-${field.id}" name="${field.id}" class="ef-input"${ph}${req}></div>`;
+      case "number":
+        return `<div class="ef-field">${label}<input type="number" id="ef-${field.id}" name="${field.id}" class="ef-input"${ph}${req}></div>`;
+      case "date":
+        return `<div class="ef-field">${label}<input type="date" id="ef-${field.id}" name="${field.id}" class="ef-input"${req}></div>`;
+      case "textarea":
+        return `<div class="ef-field">${label}<textarea id="ef-${field.id}" name="${field.id}" class="ef-textarea" rows="${field.rows || 4}"${ph}${req}></textarea></div>`;
+      case "select":
+        return `<div class="ef-field">${label}<select id="ef-${field.id}" name="${field.id}" class="ef-select"${req}><option value="">Select...</option>${(field.options || []).map((o) => `<option value="${escapeAttr(o.value)}">${escapeHtml(o.label)}</option>`).join("")}</select></div>`;
+      case "multi_select":
+        return `<div class="ef-field">${label}<select id="ef-${field.id}" name="${field.id}" class="ef-select" multiple${req}>${(field.options || []).map((o) => `<option value="${escapeAttr(o.value)}">${escapeHtml(o.label)}</option>`).join("")}</select></div>`;
+      case "radio":
+        return `<div class="ef-field">${label}<div class="ef-options">${(field.options || []).map((o) => `<label class="ef-option"><input type="radio" name="${field.id}" value="${escapeAttr(o.value)}"${req}><span>${escapeHtml(o.label)}</span></label>`).join("")}</div></div>`;
+      case "checkbox":
+        if (field.options && field.options.length > 0) {
+          return `<div class="ef-field">${label}<div class="ef-options">${field.options.map((o) => `<label class="ef-option"><input type="checkbox" name="${field.id}" value="${escapeAttr(o.value)}"><span>${escapeHtml(o.label)}</span></label>`).join("")}</div></div>`;
+        }
+        return `<div class="ef-field"><label class="ef-option"><input type="checkbox" name="${field.id}" id="ef-${field.id}"${req}><span>${escapeHtml(field.label)}</span></label></div>`;
+      case "file_upload":
+        return `<div class="ef-field">${label}<input type="file" id="ef-${field.id}" name="${field.id}" class="ef-file"${field.accept ? ` accept="${field.accept.join(",")}"` : ""}${req}></div>`;
+      case "hidden":
+        return `<input type="hidden" name="${field.id}" id="ef-${field.id}">`;
+      default:
+        return `<div class="ef-field">${label}<input type="text" id="ef-${field.id}" name="${field.id}" class="ef-input"${ph}${req}></div>`;
+    }
+  }
+
+  function escapeHtml(str: string): string {
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function escapeAttr(str: string): string {
+    return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  customElements.define("emdash-form", EmDashFormElement);
+</script>
+
+<style>
+  /* ---------------------------------------------------------------------------
+     EmDash Forms — shadcn/minimal design system
+     Override any variable on the parent or :root to theme.
+  --------------------------------------------------------------------------- */
+
+  .emdash-form {
+    --fw-accent: #18181b;
+    --fw-accent-fg: #ffffff;
+    --fw-radius: 6px;
+    --fw-border: #e4e4e7;
+    --fw-ring: #18181b;
+    --fw-font: var(--font-sans, system-ui, -apple-system, sans-serif);
+    --fw-error: #ef4444;
+
+    font-family: var(--fw-font);
+    max-width: 32rem;
+  }
+
+  .ef-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .ef-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .ef-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+
+  .ef-label {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: #18181b;
+    letter-spacing: 0.01em;
+  }
+
+  .ef-required {
+    color: var(--fw-error);
+  }
+
+  .ef-input,
+  .ef-textarea,
+  .ef-select {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    font-family: var(--fw-font);
+    color: #18181b;
+    background: #ffffff;
+    border: 1px solid var(--fw-border);
+    border-radius: var(--fw-radius);
+    outline: none;
+    transition: box-shadow 0.15s ease;
+    box-sizing: border-box;
+  }
+
+  .ef-input:focus,
+  .ef-textarea:focus,
+  .ef-select:focus {
+    box-shadow: 0 0 0 2px var(--fw-ring), 0 0 0 4px rgba(24, 24, 27, 0.08);
+    border-color: transparent;
+  }
+
+  .ef-textarea {
+    resize: vertical;
+    min-height: 5rem;
+  }
+
+  .ef-select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%2371717a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    padding-right: 2.5rem;
+  }
+
+  .ef-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ef-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: #3f3f46;
+    cursor: pointer;
+  }
+
+  .ef-option input[type="radio"],
+  .ef-option input[type="checkbox"] {
+    accent-color: var(--fw-accent);
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .ef-file {
+    font-size: 0.875rem;
+    color: #52525b;
+  }
+
+  .ef-file::file-selector-button {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+    font-family: var(--fw-font);
+    font-weight: 500;
+    color: #18181b;
+    background: #fafafa;
+    border: 1px solid var(--fw-border);
+    border-radius: var(--fw-radius);
+    cursor: pointer;
+    margin-right: 0.75rem;
+    transition: background 0.15s ease;
+  }
+
+  .ef-file::file-selector-button:hover {
+    background: #f4f4f5;
+  }
+
+  .ef-actions {
+    padding-top: 0.25rem;
+  }
+
+  .ef-submit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 1.25rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    font-family: var(--fw-font);
+    color: var(--fw-accent-fg);
+    background: var(--fw-accent);
+    border: none;
+    border-radius: var(--fw-radius);
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+
+  .ef-submit:hover:not(:disabled) {
+    opacity: 0.88;
+  }
+
+  .ef-submit:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .ef-submit:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--fw-ring), 0 0 0 4px rgba(24, 24, 27, 0.08);
+  }
+
+  .ef-message {
+    font-size: 0.875rem;
+    min-height: 1.25rem;
+  }
+
+  .ef-message--success {
+    color: #18181b;
+  }
+
+  .ef-message--error {
+    color: var(--fw-error);
+  }
+
+  .ef-error-text {
+    color: var(--fw-error);
+    font-size: 0.875rem;
+  }
+
+  .ef-loading {
+    color: #a1a1aa;
+    font-size: 0.875rem;
+  }
+
+  .ef-noscript {
+    color: #71717a;
+    font-size: 0.875rem;
+  }
+</style>
