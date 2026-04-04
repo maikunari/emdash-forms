@@ -1,6 +1,6 @@
 # emdash-forms
 
-**Gravity Forms for EmDash** — best-in-class forms plugin for the modern stack.
+**The forms plugin EmDash deserves.** Beautiful, secure, and dead simple to deploy.
 
 Contact forms, lead capture, surveys, event registration, job applications, and more. Built on Cloudflare D1, R2, and Turnstile. Designed with a shadcn/minimal aesthetic that adapts to any site.
 
