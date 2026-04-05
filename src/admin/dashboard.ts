@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// emdash-forms — Admin Block Kit: Dashboard
+// emdash-forms — Admin Block Kit: Overview (Workspace UI)
 // ---------------------------------------------------------------------------
 
 import type { PluginContext, BlockKitBlock } from "../types.js";
@@ -30,27 +30,27 @@ export async function renderDashboard(ctx: PluginContext): Promise<BlockKitBlock
   return [
     {
       type: "header",
-      text: { type: "plain_text", text: "Forms Dashboard" },
+      text: { type: "plain_text", text: "Overview" },
     },
     {
       type: "section",
       fields: [
-        { type: "mrkdwn", text: `*Total Forms*\n${formsCount?.count ?? 0}` },
-        { type: "mrkdwn", text: `*Total Submissions*\n${submissionsCount?.count ?? 0}` },
+        { type: "mrkdwn", text: `*Forms*\n${formsCount?.count ?? 0}` },
+        { type: "mrkdwn", text: `*Submissions*\n${submissionsCount?.count ?? 0}` },
         { type: "mrkdwn", text: `*Unread*\n${unreadCount?.count ?? 0}` },
       ],
     },
     { type: "divider" },
     {
-      type: "header",
-      text: { type: "plain_text", text: "Recent Submissions" },
+      type: "section",
+      text: { type: "mrkdwn", text: "*Recent activity*" },
     },
     ...(recentSubmissions.results.length > 0
       ? recentSubmissions.results.map((s) => ({
           type: "section" as const,
           text: {
             type: "mrkdwn" as const,
-            text: `${s.read_at ? "" : "● "} *${s.form_title}* — ${new Date(s.created_at).toLocaleDateString()}`,
+            text: `${s.read_at ? "" : "● "} *${s.form_title}*  ·  ${new Date(s.created_at).toLocaleDateString()}`,
           },
         }))
       : [
@@ -65,12 +65,12 @@ export async function renderDashboard(ctx: PluginContext): Promise<BlockKitBlock
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "View All Forms" },
+          text: { type: "plain_text", text: "All forms" },
           action_id: "navigate_forms",
         },
         {
           type: "button",
-          text: { type: "plain_text", text: "Create New Form" },
+          text: { type: "plain_text", text: "New form" },
           action_id: "navigate_form_builder",
         },
       ],

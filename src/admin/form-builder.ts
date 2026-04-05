@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// emdash-forms — Admin Block Kit: Form builder
+// emdash-forms — Admin Block Kit: Form builder (Workspace UI)
 // ---------------------------------------------------------------------------
 
 import type { PluginContext, BlockKitBlock, Form, FormField } from "../types.js";
@@ -49,7 +49,7 @@ export async function renderFormBuilder(
   }
 
   const isEdit = !!form;
-  const title = isEdit ? `Edit Form — ${form!.title}` : "New Form";
+  const title = isEdit ? `Edit — ${form!.title}` : "New form";
   const fields: FormField[] = form?.config.fields ?? [];
 
   const blocks: BlockKitBlock[] = [
@@ -62,7 +62,7 @@ export async function renderFormBuilder(
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "← Back to Forms" },
+          text: { type: "plain_text", text: "Back" },
           action_id: "navigate_forms",
         },
       ],
@@ -89,7 +89,7 @@ export async function renderFormBuilder(
         initial_value: form?.slug || "",
         placeholder: { type: "plain_text", text: "e.g. contact" },
       },
-      hint: { type: "plain_text", text: "URL-safe identifier. Used in the submission endpoint." },
+      hint: { type: "plain_text", text: "URL-safe identifier used in the submission endpoint." },
     },
 
     { type: "divider" },
@@ -131,7 +131,7 @@ export async function renderFormBuilder(
         {
           type: "static_select",
           action_id: "add_field_type",
-          placeholder: { type: "plain_text", text: "Add a field..." },
+          placeholder: { type: "plain_text", text: "Add field..." },
           options: FIELD_TYPE_OPTIONS.map((opt) => ({
             text: { type: "plain_text", text: opt.label },
             value: opt.value,
@@ -147,7 +147,7 @@ export async function renderFormBuilder(
     },
     {
       type: "input",
-      label: { type: "plain_text", text: "Submit Button Label" },
+      label: { type: "plain_text", text: "Button label" },
       element: {
         type: "plain_text_input",
         action_id: "submit_label",
@@ -156,7 +156,7 @@ export async function renderFormBuilder(
     },
     {
       type: "input",
-      label: { type: "plain_text", text: "Success Message" },
+      label: { type: "plain_text", text: "Success message" },
       element: {
         type: "plain_text_input",
         action_id: "success_message",
@@ -166,7 +166,7 @@ export async function renderFormBuilder(
     },
     {
       type: "input",
-      label: { type: "plain_text", text: "Redirect URL (optional)" },
+      label: { type: "plain_text", text: "Redirect URL" },
       element: {
         type: "plain_text_input",
         action_id: "redirect_url",
@@ -183,7 +183,7 @@ export async function renderFormBuilder(
     },
     {
       type: "input",
-      label: { type: "plain_text", text: "Notify admin on submission" },
+      label: { type: "plain_text", text: "Admin notifications" },
       element: {
         type: "checkboxes",
         action_id: "notify_admin",
@@ -204,7 +204,7 @@ export async function renderFormBuilder(
     },
     {
       type: "input",
-      label: { type: "plain_text", text: "Send confirmation email to submitter" },
+      label: { type: "plain_text", text: "Confirmation email" },
       element: {
         type: "checkboxes",
         action_id: "confirmation_email",
@@ -230,7 +230,7 @@ export async function renderFormBuilder(
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: isEdit ? "Save Changes" : "Create Form" },
+          text: { type: "plain_text", text: isEdit ? "Save" : "Create" },
           action_id: isEdit ? `save_form_${form!.id}` : "create_form",
           style: "primary",
         },

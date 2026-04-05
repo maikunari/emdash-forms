@@ -6,9 +6,9 @@
  *   <EmDashForm slug="contact" />
  *   <EmDashForm slug="contact" action="https://yoursite.com/api/plugins/emdash-forms/submit/contact" />
  *
- * Theming — override CSS custom properties:
+ * Theming — override CSS custom properties on .emdash-form or :root:
  *   <EmDashForm slug="contact" class="my-form" />
- *   .my-form { --fw-accent: #2563eb; }
+ *   .my-form { --fw-accent: #2383e2; --fw-border: rgba(55,53,47,0.09); }
  */
 
 interface Props {
@@ -219,33 +219,39 @@ const endpoint = action || `/api/plugins/emdash-forms/submit/${slug}`;
 
 <style>
   /* ---------------------------------------------------------------------------
-     EmDash Forms — shadcn/minimal design system
+     EmDash Forms — Workspace / Notion design system
+     Clean monochrome, Inter font, subtle borders, minimal workspace aesthetic.
      Override any variable on the parent or :root to theme.
   --------------------------------------------------------------------------- */
 
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
   .emdash-form {
-    --fw-accent: #18181b;
+    --fw-accent: #37352f;
     --fw-accent-fg: #ffffff;
-    --fw-radius: 6px;
-    --fw-border: #e4e4e7;
-    --fw-ring: #18181b;
-    --fw-font: var(--font-sans, system-ui, -apple-system, sans-serif);
-    --fw-error: #ef4444;
+    --fw-radius: 4px;
+    --fw-border: rgba(55, 53, 47, 0.16);
+    --fw-ring: rgba(35, 131, 226, 0.35);
+    --fw-font: 'Inter', ui-sans-serif, -apple-system, system-ui, sans-serif;
+    --fw-error: #eb5757;
 
     font-family: var(--fw-font);
-    max-width: 32rem;
+    max-width: 34rem;
+    color: #37352f;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   .ef-form {
     display: flex;
     flex-direction: column;
-    gap: 1.25rem;
+    gap: 1.5rem;
   }
 
   .ef-fields {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 1.125rem;
   }
 
   .ef-field {
@@ -255,38 +261,50 @@ const endpoint = action || `/api/plugins/emdash-forms/submit/${slug}`;
   }
 
   .ef-label {
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
     font-weight: 500;
-    color: #18181b;
-    letter-spacing: 0.01em;
+    color: #37352f;
+    letter-spacing: -0.005em;
   }
 
   .ef-required {
     color: var(--fw-error);
+    font-weight: 400;
   }
 
   .ef-input,
   .ef-textarea,
   .ef-select {
     width: 100%;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.875rem;
+    padding: 0.5rem 0.625rem;
+    font-size: 0.9375rem;
     line-height: 1.5;
     font-family: var(--fw-font);
-    color: #18181b;
+    color: #37352f;
     background: #ffffff;
     border: 1px solid var(--fw-border);
     border-radius: var(--fw-radius);
     outline: none;
-    transition: box-shadow 0.15s ease;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
     box-sizing: border-box;
+  }
+
+  .ef-input::placeholder,
+  .ef-textarea::placeholder {
+    color: rgba(55, 53, 47, 0.35);
+  }
+
+  .ef-input:hover,
+  .ef-textarea:hover,
+  .ef-select:hover {
+    border-color: rgba(55, 53, 47, 0.3);
   }
 
   .ef-input:focus,
   .ef-textarea:focus,
   .ef-select:focus {
-    box-shadow: 0 0 0 2px var(--fw-ring), 0 0 0 4px rgba(24, 24, 27, 0.08);
-    border-color: transparent;
+    border-color: rgba(35, 131, 226, 0.5);
+    box-shadow: 0 0 0 3px var(--fw-ring);
   }
 
   .ef-textarea {
@@ -296,37 +314,40 @@ const endpoint = action || `/api/plugins/emdash-forms/submit/${slug}`;
 
   .ef-select {
     appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%2371717a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%2337352f' stroke-width='1.25' stroke-linecap='round' stroke-linejoin='round' opacity='0.5'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 0.75rem center;
-    padding-right: 2.5rem;
+    background-position: right 0.625rem center;
+    padding-right: 2.25rem;
   }
 
   .ef-options {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+    padding-top: 0.125rem;
   }
 
   .ef-option {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.875rem;
-    color: #3f3f46;
+    font-size: 0.9375rem;
+    color: #37352f;
     cursor: pointer;
+    padding: 0.125rem 0;
   }
 
   .ef-option input[type="radio"],
   .ef-option input[type="checkbox"] {
-    accent-color: var(--fw-accent);
+    accent-color: #2383e2;
     width: 1rem;
     height: 1rem;
+    cursor: pointer;
   }
 
   .ef-file {
     font-size: 0.875rem;
-    color: #52525b;
+    color: #787774;
   }
 
   .ef-file::file-selector-button {
@@ -334,51 +355,52 @@ const endpoint = action || `/api/plugins/emdash-forms/submit/${slug}`;
     font-size: 0.8125rem;
     font-family: var(--fw-font);
     font-weight: 500;
-    color: #18181b;
-    background: #fafafa;
+    color: #37352f;
+    background: #ffffff;
     border: 1px solid var(--fw-border);
     border-radius: var(--fw-radius);
     cursor: pointer;
     margin-right: 0.75rem;
-    transition: background 0.15s ease;
+    transition: background 0.12s ease;
   }
 
   .ef-file::file-selector-button:hover {
-    background: #f4f4f5;
+    background: rgba(55, 53, 47, 0.04);
   }
 
   .ef-actions {
-    padding-top: 0.25rem;
+    padding-top: 0.375rem;
   }
 
   .ef-submit {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0.5rem 1.25rem;
+    padding: 0.5rem 1rem;
     font-size: 0.875rem;
     font-weight: 500;
     font-family: var(--fw-font);
+    letter-spacing: -0.005em;
     color: var(--fw-accent-fg);
     background: var(--fw-accent);
     border: none;
     border-radius: var(--fw-radius);
     cursor: pointer;
-    transition: opacity 0.15s ease;
+    transition: background 0.12s ease;
   }
 
   .ef-submit:hover:not(:disabled) {
-    opacity: 0.88;
+    background: #2f2e2a;
   }
 
   .ef-submit:disabled {
-    opacity: 0.5;
+    opacity: 0.4;
     cursor: not-allowed;
   }
 
   .ef-submit:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 2px var(--fw-ring), 0 0 0 4px rgba(24, 24, 27, 0.08);
+    box-shadow: 0 0 0 3px var(--fw-ring);
   }
 
   .ef-message {
@@ -387,7 +409,7 @@ const endpoint = action || `/api/plugins/emdash-forms/submit/${slug}`;
   }
 
   .ef-message--success {
-    color: #18181b;
+    color: #37352f;
   }
 
   .ef-message--error {
@@ -400,12 +422,12 @@ const endpoint = action || `/api/plugins/emdash-forms/submit/${slug}`;
   }
 
   .ef-loading {
-    color: #a1a1aa;
+    color: #787774;
     font-size: 0.875rem;
   }
 
   .ef-noscript {
-    color: #71717a;
+    color: #787774;
     font-size: 0.875rem;
   }
 </style>

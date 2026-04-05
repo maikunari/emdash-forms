@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// emdash-forms — Admin Block Kit router
+// emdash-forms — Admin Block Kit router (Workspace UI)
 // ---------------------------------------------------------------------------
 
 import type { PluginContext, BlockKitBlock } from "../types.js";
@@ -49,7 +49,7 @@ export async function adminHandler(
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "Dashboard" },
+          text: { type: "plain_text", text: "Overview" },
           action_id: "navigate_dashboard",
           ...(page === "dashboard" ? { style: "primary" } : {}),
         },

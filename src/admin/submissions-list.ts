@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// emdash-forms — Admin Block Kit: Submissions table
+// emdash-forms — Admin Block Kit: Submissions (Workspace UI)
 // ---------------------------------------------------------------------------
 
 import type { PluginContext, BlockKitBlock } from "../types.js";
@@ -48,12 +48,12 @@ export async function renderSubmissionsList(
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "← Back to Forms" },
+          text: { type: "plain_text", text: "Back" },
           action_id: "navigate_forms",
         },
         {
           type: "button",
-          text: { type: "plain_text", text: "Export CSV" },
+          text: { type: "plain_text", text: "Export" },
           action_id: `export_csv_${formId}`,
         },
       ],

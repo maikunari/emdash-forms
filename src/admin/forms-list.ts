@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// emdash-forms — Admin Block Kit: Forms list
+// emdash-forms — Admin Block Kit: Forms list (Workspace UI)
 // ---------------------------------------------------------------------------
 
 import type { PluginContext, BlockKitBlock } from "../types.js";
@@ -34,7 +34,7 @@ export async function renderFormsList(ctx: PluginContext): Promise<BlockKitBlock
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "+ New Form" },
+          text: { type: "plain_text", text: "New form" },
           action_id: "navigate_form_builder",
           style: "primary",
         },
@@ -48,7 +48,7 @@ export async function renderFormsList(ctx: PluginContext): Promise<BlockKitBlock
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "_No forms created yet. Create your first form to get started._",
+        text: "_No forms yet. Create one to get started._",
       },
     });
     return blocks;

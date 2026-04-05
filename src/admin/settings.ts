@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// emdash-forms — Admin Block Kit: Global settings
+// emdash-forms — Admin Block Kit: Settings (Workspace UI)
 // ---------------------------------------------------------------------------
 
 import type { PluginContext, BlockKitBlock } from "../types.js";
@@ -26,7 +26,7 @@ export async function renderSettings(ctx: PluginContext): Promise<BlockKitBlock[
         initial_value: settings["adminEmail"] || "",
         placeholder: { type: "plain_text", text: "admin@example.com" },
       },
-      hint: { type: "plain_text", text: "Default recipient for form submission notifications." },
+      hint: { type: "plain_text", text: "Default recipient for submission notifications." },
     },
     {
       type: "input",
@@ -37,13 +37,13 @@ export async function renderSettings(ctx: PluginContext): Promise<BlockKitBlock[
         initial_value: settings["fromEmail"] || "",
         placeholder: { type: "plain_text", text: "forms@yourdomain.com" },
       },
-      hint: { type: "plain_text", text: "Sender address for all form notification emails." },
+      hint: { type: "plain_text", text: "Sender address for notification emails." },
     },
 
     { type: "divider" },
     {
       type: "header",
-      text: { type: "plain_text", text: "Spam Protection" },
+      text: { type: "plain_text", text: "Turnstile" },
     },
     {
       type: "input",
@@ -54,7 +54,7 @@ export async function renderSettings(ctx: PluginContext): Promise<BlockKitBlock[
         initial_value: settings["turnstileSiteKey"] || "",
         placeholder: { type: "plain_text", text: "0x..." },
       },
-      hint: { type: "plain_text", text: "Cloudflare Turnstile site key. Get one at dash.cloudflare.com." },
+      hint: { type: "plain_text", text: "Cloudflare Turnstile site key from dash.cloudflare.com." },
     },
     {
       type: "input",
@@ -65,7 +65,7 @@ export async function renderSettings(ctx: PluginContext): Promise<BlockKitBlock[
         initial_value: settings["turnstileSecretKey"] ? "••••••••" : "",
         placeholder: { type: "plain_text", text: "0x..." },
       },
-      hint: { type: "plain_text", text: "Server-side secret key for Turnstile verification." },
+      hint: { type: "plain_text", text: "Server-side secret key for verification." },
     },
 
     { type: "divider" },
@@ -74,7 +74,7 @@ export async function renderSettings(ctx: PluginContext): Promise<BlockKitBlock[
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "Save Settings" },
+          text: { type: "plain_text", text: "Save" },
           action_id: "save_settings",
           style: "primary",
         },
