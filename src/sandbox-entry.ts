@@ -19,6 +19,19 @@ import {
 	submitSchema,
 } from "./validation.js";
 
+// NOTE: SPEC-v1 §3.1 specifies composite indexes (["formId", "createdAt"],
+// ["formId", "status"]) on the submissions collection. The emdash 0.5.0
+// TypeScript surface does not accept composite indexes on Standard-format
+// plugins — PluginDescriptor's StorageCollectionDeclaration.indexes is
+// `string[]`, and StandardPluginDefinition has no storage field at all.
+// Composite indexes are a Native-only feature via PluginDefinition<TStorage>.
+//
+// Phase 0 ships flat indexes only, declared in the descriptor. Query paths
+// that would benefit from composites (per-form submissions ordered by
+// createdAt) will use filter-then-order on a single-field index instead;
+// we'll benchmark in Phase 2 and revisit before v1.0.0 if needed.
+// Flagged in the Phase 0 PR for spec revision.
+
 // ─── Shared stub response ─────────────────────────────────────────────
 
 const NOT_IMPLEMENTED = { ok: false, error: "not implemented (Phase 0 stub)" } as const;
@@ -52,9 +65,11 @@ function matchAdminPage(
 	| { kind: "form-edit"; formId: string }
 	| { kind: "submissions-list" }
 	| { kind: "submission-detail"; submissionId: string }
+	| { kind: "settings" }
 	| { kind: "unknown" } {
 	if (!page || page === "/") return { kind: "forms-list" };
 	if (page === "/forms/new") return { kind: "form-new" };
+	if (page === "/settings") return { kind: "settings" };
 
 	const fieldEditMatch = /^\/forms\/([^/]+)\/fields\/([^/]+)$/.exec(page);
 	if (fieldEditMatch) {
@@ -171,6 +186,7 @@ export default definePlugin({
 					case "form-submissions":
 					case "submissions-list":
 					case "submission-detail":
+					case "settings":
 					case "unknown":
 						return PLACEHOLDER_BLOCKS;
 				}

@@ -17,7 +17,7 @@ import { z } from "astro/zod";
 /** SPEC §4.1 — POST submit (public). */
 export const submitSchema = z.object({
 	formSlug: z.string().min(1),
-	data: z.record(z.unknown()),
+	data: z.record(z.string(), z.unknown()),
 	/** Honeypot — must be empty or absent for a real submission. */
 	_emdash_hp: z.string().optional(),
 	/** Turnstile token when form's spamProtection === "turnstile". */
@@ -41,7 +41,7 @@ export const interactionSchema = z.object({
 	page: z.string().optional(),
 	action_id: z.string().optional(),
 	block_id: z.string().optional(),
-	values: z.record(z.unknown()).optional(),
+	values: z.record(z.string(), z.unknown()).optional(),
 	value: z.string().optional(),
 });
 
