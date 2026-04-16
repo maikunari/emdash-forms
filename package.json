@@ -1,43 +1,58 @@
 {
   "name": "emdash-forms",
-  "version": "0.1.0",
-  "description": "Best-in-class forms plugin for EmDash — Gravity Forms for the modern stack",
+  "version": "1.0.0-alpha.0",
+  "description": "Forms plugin for EmDash CMS — contact forms, lead capture, surveys, and more. Block Kit admin, marketplace-ready.",
   "type": "module",
   "license": "MIT",
   "author": "maikunari",
   "repository": {
     "type": "git",
-    "url": "https://github.com/maikunari/emdash-forms"
+    "url": "git+https://github.com/maikunari/emdash-forms.git"
   },
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "keywords": [
+    "emdash",
+    "emdash-plugin",
+    "cms",
+    "forms",
+    "contact-form",
+    "submissions"
+  ],
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
     },
-    "./astro": {
-      "import": "./dist/astro/EmDashForm.astro"
-    }
+    "./sandbox": {
+      "types": "./dist/sandbox-entry.d.mts",
+      "import": "./dist/sandbox-entry.mjs"
+    },
+    "./astro": "./src/astro/EmDashForm.astro"
   },
   "files": [
     "dist",
     "src/astro"
   ],
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
-    "typecheck": "tsc --noEmit"
+    "build": "tsdown src/index.ts src/sandbox-entry.ts --format esm --dts --clean",
+    "dev": "tsdown src/index.ts src/sandbox-entry.ts --format esm --dts --watch",
+    "typecheck": "tsc --noEmit",
+    "bundle": "emdash plugin bundle"
+  },
+  "peerDependencies": {
+    "emdash": "^0.5.0",
+    "astro": ">=6.0.0-beta.0"
+  },
+  "peerDependenciesMeta": {
+    "@emdash-cms/plugin-resend": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "astro": ">=6.0.0-beta.0",
+    "emdash": "^0.5.0",
+    "tsdown": "^0.6.0",
     "typescript": "^5.4.0"
-  },
-  "keywords": [
-    "emdash",
-    "forms",
-    "plugin",
-    "cms",
-    "cloudflare",
-    "d1"
-  ]
+  }
 }
