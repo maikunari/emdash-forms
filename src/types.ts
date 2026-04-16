@@ -1,249 +1,172 @@
-// ---------------------------------------------------------------------------
-// emdash-forms — TypeScript type definitions
-// ---------------------------------------------------------------------------
+/**
+ * emdash-forms — Shared type definitions
+ *
+ * Mirrors SPEC-v1.md §3.3 exactly. The FieldType union has 10 variants
+ * (phone rolled into text_input.inputType per SPEC Q4 decision).
+ */
 
-/** All supported field types */
+// ─── Fields ───────────────────────────────────────────────────────────
+
 export type FieldType =
-  | "text_input"
-  | "email"
-  | "phone"
-  | "textarea"
-  | "select"
-  | "multi_select"
-  | "checkbox"
-  | "radio"
-  | "number"
-  | "date"
-  | "hidden"
-  | "file_upload";
+	| "text_input"
+	| "email"
+	| "textarea"
+	| "select"
+	| "multi_select"
+	| "checkbox"
+	| "radio"
+	| "number"
+	| "date"
+	| "hidden";
 
-/** Conditional visibility rule — matches Block Kit native condition format */
 export interface FieldCondition {
-  field: string;
-  eq?: string;
-  neq?: string;
-  in?: string[];
-}
-
-/** Base properties shared by every field */
-export interface BaseField {
-  type: FieldType;
-  id: string;
-  label: string;
-  required?: boolean;
-  placeholder?: string;
-  helpText?: string;
-  condition?: FieldCondition;
-  width?: "full" | "half";
-}
-
-export interface TextField extends BaseField {
-  type: "text_input";
-  inputType?: "text" | "email" | "url" | "tel";
-  maxLength?: number;
-}
-
-export interface EmailField extends BaseField {
-  type: "email";
-}
-
-export interface PhoneField extends BaseField {
-  type: "phone";
-}
-
-export interface TextareaField extends BaseField {
-  type: "textarea";
-  rows?: number;
-  maxLength?: number;
+	field: string;
+	eq?: string | number | boolean;
+	neq?: string | number | boolean;
+	in?: Array<string | number>;
 }
 
 export interface SelectOption {
-  label: string;
-  value: string;
+	label: string;
+	value: string;
+}
+
+/** Base properties shared by every field type. */
+export interface BaseField {
+	type: FieldType;
+	id: string;
+	label: string;
+	required?: boolean;
+	placeholder?: string;
+	helpText?: string;
+	width?: "full" | "half";
+	condition?: FieldCondition;
+}
+
+export interface TextInputField extends BaseField {
+	type: "text_input";
+	inputType?: "text" | "email" | "url" | "tel";
+	maxLength?: number;
+}
+
+export interface EmailField extends BaseField {
+	type: "email";
+}
+
+export interface TextareaField extends BaseField {
+	type: "textarea";
+	rows?: number;
+	maxLength?: number;
 }
 
 export interface SelectField extends BaseField {
-  type: "select";
-  options: SelectOption[];
+	type: "select";
+	options: SelectOption[];
 }
 
 export interface MultiSelectField extends BaseField {
-  type: "multi_select";
-  options: SelectOption[];
+	type: "multi_select";
+	options: SelectOption[];
 }
 
 export interface CheckboxField extends BaseField {
-  type: "checkbox";
-  options?: SelectOption[];
+	type: "checkbox";
+	/** If omitted or empty, renders as a single boolean checkbox. */
+	options?: SelectOption[];
 }
 
 export interface RadioField extends BaseField {
-  type: "radio";
-  options: SelectOption[];
+	type: "radio";
+	options: SelectOption[];
 }
 
 export interface NumberField extends BaseField {
-  type: "number";
-  min?: number;
-  max?: number;
-  step?: number;
+	type: "number";
+	min?: number;
+	max?: number;
+	step?: number;
 }
 
 export interface DateField extends BaseField {
-  type: "date";
-  min?: string;
-  max?: string;
+	type: "date";
+	min?: string;
+	max?: string;
 }
 
 export interface HiddenField extends BaseField {
-  type: "hidden";
-  defaultValue?: string;
+	type: "hidden";
+	/** Always included in the submission. See SPEC §6.3. */
+	defaultValue?: string;
 }
 
-export interface FileUploadField extends BaseField {
-  type: "file_upload";
-  accept?: string[];
-  maxSizeMB?: number;
-}
-
-/** Union of all field types */
+/** Discriminated union of all field variants. */
 export type FormField =
-  | TextField
-  | EmailField
-  | PhoneField
-  | TextareaField
-  | SelectField
-  | MultiSelectField
-  | CheckboxField
-  | RadioField
-  | NumberField
-  | DateField
-  | HiddenField
-  | FileUploadField;
+	| TextInputField
+	| EmailField
+	| TextareaField
+	| SelectField
+	| MultiSelectField
+	| CheckboxField
+	| RadioField
+	| NumberField
+	| DateField
+	| HiddenField;
 
-/** A step in a multi-step form */
-export interface FormStep {
-  title?: string;
-  description?: string;
-  fields: FormField[];
-}
+// ─── Form ─────────────────────────────────────────────────────────────
 
-/** Notification configuration */
 export interface NotificationSettings {
-  notifyAdmin: boolean;
-  adminEmail?: string;
-  adminSubject?: string;
-  adminBody?: string;
-  confirmationEmail: boolean;
-  confirmationSubject?: string;
-  confirmationBody?: string;
-  fromName?: string;
+	notifyAdmin: boolean;
+	adminEmail?: string;
+	adminSubject?: string;
+	adminBody?: string;
+	confirmationEmail: boolean;
+	confirmationSubject?: string;
+	confirmationBody?: string;
 }
 
-/** Form-level settings */
 export interface FormSettings {
-  submitLabel: string;
-  successMessage: string;
-  redirectUrl?: string;
-  notifications: NotificationSettings;
-  turnstile: boolean;
+	submitLabel: string;
+	successMessage: string;
+	redirectUrl?: string;
+	notifications: NotificationSettings;
+	spamProtection: "honeypot" | "turnstile";
 }
 
-/** Full form configuration stored in the config JSON column */
-export interface FormConfig {
-  /** Single-step forms use fields; multi-step use steps */
-  fields?: FormField[];
-  steps?: FormStep[];
-}
-
-/** Form record as stored in D1 */
 export interface Form {
-  id: string;
-  title: string;
-  slug: string;
-  config: FormConfig;
-  settings: FormSettings;
-  created_at: string;
-  updated_at: string;
+	title: string;
+	slug: string;
+	fields: FormField[];
+	settings: FormSettings;
+	status: "active" | "paused";
+	submissionCount: number;
+	lastSubmissionAt: string | null;
+	createdAt: string;
+	updatedAt: string;
 }
 
-/** Submission metadata */
-export interface SubmissionMetadata {
-  ip?: string;
-  userAgent?: string;
-  referer?: string;
+// ─── Submission ───────────────────────────────────────────────────────
+
+export interface SubmissionMeta {
+	ip?: string;
+	userAgent?: string;
+	referer?: string;
+	country?: string;
 }
 
-/** Submission record as stored in D1 */
-export interface FormSubmission {
-  id: string;
-  form_id: string;
-  data: Record<string, unknown>;
-  metadata: SubmissionMetadata | null;
-  read_at: string | null;
-  created_at: string;
+export interface Submission {
+	formId: string;
+	data: Record<string, unknown>;
+	meta: SubmissionMeta;
+	status: "new" | "read" | "archived";
+	createdAt: string;
 }
 
-/** Form template definition */
+// ─── Templates ────────────────────────────────────────────────────────
+
 export interface FormTemplate {
-  title: string;
-  slug: string;
-  fields: FormField[];
-  settings: Omit<FormSettings, "notifications" | "turnstile"> & {
-    notifyAdmin: boolean;
-    confirmationEmail: boolean;
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Plugin context types (subset of EmDash plugin SDK)
-// ---------------------------------------------------------------------------
-
-export interface PluginDB {
-  exec(sql: string): Promise<void>;
-  prepare(sql: string): PluginStatement;
-}
-
-export interface PluginStatement {
-  bind(...values: unknown[]): PluginStatement;
-  all<T = Record<string, unknown>>(): Promise<{ results: T[] }>;
-  first<T = Record<string, unknown>>(): Promise<T | null>;
-  run(): Promise<void>;
-}
-
-export interface PluginEmail {
-  send(options: {
-    to: string;
-    from?: string;
-    subject: string;
-    html: string;
-    text?: string;
-  }): Promise<void>;
-}
-
-export interface PluginStorage {
-  createPresignedUrl(key: string, options?: {
-    expiresIn?: number;
-    contentType?: string;
-  }): Promise<string>;
-  getPublicUrl(key: string): string;
-}
-
-export interface PluginHTTP {
-  fetch(url: string, init?: RequestInit): Promise<Response>;
-}
-
-export interface PluginContext {
-  db: PluginDB;
-  email: PluginEmail;
-  storage: PluginStorage;
-  http: PluginHTTP;
-  siteUrl: string;
-  pluginSettings: Record<string, string>;
-}
-
-/** Block Kit block types used by admin UI */
-export interface BlockKitBlock {
-  type: string;
-  [key: string]: unknown;
+	id: string;
+	title: string;
+	description: string;
+	fields: FormField[];
+	defaultSettings: Partial<FormSettings>;
 }
