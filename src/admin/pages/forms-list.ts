@@ -12,6 +12,7 @@
 import type { PluginContext, StorageCollection } from "emdash";
 import { pluralize } from "../format.js";
 import type { BlockResponse } from "../router.js";
+import { TEMPLATES } from "../../templates/index.js";
 import type { Form, Submission } from "../../types.js";
 
 // Per-form overflow limit — capping the forms list prevents accidental
@@ -57,6 +58,15 @@ export async function buildFormsListPage(ctx: PluginContext): Promise<BlockRespo
 					text: "New form",
 					action_id: "navigate:/forms/new",
 					style: "primary",
+				},
+				{
+					type: "select",
+					action_id: "form:new_from_template",
+					placeholder: "New from template…",
+					options: TEMPLATES.map((t) => ({
+						label: t.title,
+						value: t.id,
+					})),
 				},
 				{
 					type: "button",

@@ -14,7 +14,7 @@
 
 import type { PluginContext, StorageCollection } from "emdash";
 import type { BlockResponse } from "../router.js";
-import { buildFormsListPage } from "./forms-list.js";
+import { buildFormEditPage } from "./form-edit.js";
 import type { Form, FormSettings } from "../../types.js";
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -150,13 +150,9 @@ export async function createFormAction(
 
 	ctx.log.info("[emdash-forms] form created", { id, slug });
 
-	// Ideally we navigate to /forms/{id} for the full builder. That
-	// page is a Phase 3 commit-2 item, so for commit 1 we land the
-	// admin on the forms list with a success toast — they can click
-	// into the new form from there. Commit 2 switches this to a proper
-	// /forms/{id} navigation.
+	// Navigate into the full builder.
 	return {
-		...(await buildFormsListPage(ctx)),
+		...(await buildFormEditPage(ctx, id)),
 		toast: { message: `Form "${rawTitle}" created`, type: "success" },
 	};
 }

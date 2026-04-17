@@ -18,6 +18,12 @@ import {
 	deleteSubmissionAction,
 	pauseFormAction,
 } from "./actions.js";
+import {
+	createFormFromTemplate,
+	saveFormBehavior,
+	saveFormMetadata,
+	saveFormNotifications,
+} from "./form-save.js";
 import { buildFormEditPage } from "./pages/form-edit.js";
 import { buildFormNewPage, createFormAction } from "./pages/form-new.js";
 import { buildFormsListPage } from "./pages/forms-list.js";
@@ -217,7 +223,8 @@ export async function dispatchAdminInteraction(
 	// form_submit → action handlers
 	if (interaction.type === "form_submit") {
 		const values = interaction.values ?? {};
-		switch (interaction.action_id) {
+		const actionId = interaction.action_id ?? "";
+		switch (actionId) {
 			case "save_settings_email":
 				return saveEmailSettings(pluginCtx, values);
 			case "save_settings_retention":
@@ -227,7 +234,24 @@ export async function dispatchAdminInteraction(
 			case "form_create":
 				return createFormAction(pluginCtx, values);
 		}
-		return placeholder(`form_submit:${interaction.action_id ?? "unknown"}`);
+
+		// Form-edit save handlers — action ids carry the formId suffix
+		// so the handler knows which form to update.
+		if (actionId.startsWith("form_save_metadata:")) {
+			return saveFormMetadata(pluginCtx, actionId.slice("form_save_metadata:".length), values);
+		}
+		if (actionId.startsWith("form_save_behavior:")) {
+			return saveFormBehavior(pluginCtx, actionId.slice("form_save_behavior:".length), values);
+		}
+		if (actionId.startsWith("form_save_notifications:")) {
+			return saveFormNotifications(
+				pluginCtx,
+				actionId.slice("form_save_notifications:".length),
+				values,
+			);
+		}
+
+		return placeholder(`form_submit:${actionId}`);
 	}
 
 	// block_action → action handlers
@@ -273,6 +297,11 @@ export async function dispatchAdminInteraction(
 		if (actionId.startsWith("form:menu:")) {
 			const selected = typeof interaction.value === "string" ? interaction.value : "";
 			return dispatchFormOverflow(pluginCtx, selected);
+		}
+		// "New from template" dropdown — picked value is the template id.
+		if (actionId === "form:new_from_template") {
+			const templateId = typeof interaction.value === "string" ? interaction.value : "";
+			return createFormFromTemplate(pluginCtx, templateId);
 		}
 		// Direct form:* actions (e.g. from confirm dialogs in future).
 		if (actionId.startsWith("form:")) {
