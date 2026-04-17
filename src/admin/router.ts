@@ -12,6 +12,13 @@
 
 import type { PluginContext, RouteContext } from "emdash";
 
+import {
+	buildSettingsPage,
+	saveEmailSettings,
+	saveRetentionSettings,
+	saveTurnstileSettings,
+} from "./pages/settings.js";
+
 // ─── Block Kit response shapes (local) ───────────────────────────────
 //
 // emdash doesn't re-export BlockResponse as a named type (it lives in
@@ -130,9 +137,13 @@ export async function dispatchAdminInteraction(
 		});
 	}
 
+	const pluginCtx = ctx as PluginContext;
+
 	// page_load → page builders
 	if (interaction.type === "page_load" || !interaction.type) {
 		switch (match.kind) {
+			case "settings":
+				return buildSettingsPage(pluginCtx);
 			case "forms-list":
 			case "form-new":
 			case "form-edit":
@@ -140,14 +151,22 @@ export async function dispatchAdminInteraction(
 			case "form-submissions":
 			case "submissions-list":
 			case "submission-detail":
-			case "settings":
 			case "unknown":
 				return placeholder(match.kind);
 		}
 	}
 
-	// form_submit → action handlers (Phase 2 fills these in)
+	// form_submit → action handlers
 	if (interaction.type === "form_submit") {
+		const values = interaction.values ?? {};
+		switch (interaction.action_id) {
+			case "save_settings_email":
+				return saveEmailSettings(pluginCtx, values);
+			case "save_settings_retention":
+				return saveRetentionSettings(pluginCtx, values);
+			case "save_settings_turnstile":
+				return saveTurnstileSettings(pluginCtx, values);
+		}
 		return placeholder(`form_submit:${interaction.action_id ?? "unknown"}`);
 	}
 
