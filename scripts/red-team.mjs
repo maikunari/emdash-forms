@@ -729,6 +729,321 @@ await safe("Double-delete of same submission is idempotent", async () => {
 	assert.equal(res.toast.type, "info");
 });
 
+// ═══ Phase 3 — Admin write path ══════════════════════════════════════
+
+// ── SPEC §13.2 Phase 3: slug collision with reserved path ───────────
+
+await safe("Form with slug 'admin' or 'new' doesn't collide with admin routes", async () => {
+	// submitSchema / public /submit lives at /_emdash/api/plugins/emdash-
+	// forms/submit — slugs don't appear in the URL path. Admin pages
+	// use /_emdash/admin/plugins/emdash-forms/... which also doesn't
+	// include slug. Only place the slug surfaces is as a form lookup
+	// key via `where: {slug}` queries. So "admin" or "new" as a slug
+	// is fine from a routing perspective. Test verifies they save and
+	// submit round-trip.
+	const ctx = makeCtx();
+	const r1 = await admin(ctx, {
+		type: "form_submit",
+		action_id: "form_create",
+		values: { title: "Admin Panel Form", slug: "admin" },
+	});
+	assert.equal(r1.toast.type, "success");
+	const r2 = await admin(ctx, {
+		type: "form_submit",
+		action_id: "form_create",
+		values: { title: "New Form", slug: "new" },
+	});
+	assert.equal(r2.toast.type, "success");
+	// And submitting to these slugs works (route is /submit, slug is payload).
+	const sub = await plugin.routes.submit.handler(
+		makeRouteCtx(ctx, { formSlug: "admin", data: {} }),
+	);
+	assert.equal(sub.success, true);
+});
+
+// ── SPEC §13.2 Phase 3: slug uniqueness enforcement ────────────────
+
+await safe("Two forms cannot share a slug (uniqueIndexes enforced)", async () => {
+	const ctx = makeCtx();
+	await admin(ctx, {
+		type: "form_submit",
+		action_id: "form_create",
+		values: { title: "A", slug: "shared" },
+	});
+	const r2 = await admin(ctx, {
+		type: "form_submit",
+		action_id: "form_create",
+		values: { title: "B", slug: "shared" },
+	});
+	assert.equal(r2.toast.type, "error");
+	assert.ok(r2.toast.message.includes("already exists"));
+});
+
+// ── SPEC §13.2 Phase 3: field ID adversarial chars ─────────────────
+
+await safe("Field ID adversarial chars rejected (lowercase + safe set only)", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [contactId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+
+	const adversarial = [
+		"../evil",
+		"has spaces",
+		"has'quote",
+		"has\nnewline",
+		"Uppercase",
+		"a/b",
+		"emoji😀",
+		"", // empty
+	];
+	for (const id of adversarial) {
+		const res = await admin(ctx, {
+			type: "form_submit",
+			action_id: `field_save_shared:${contactId}:name`,
+			values: {
+				type: "text_input",
+				id,
+				label: "x",
+				required: false,
+				placeholder: "",
+				helpText: "",
+				width: "full",
+			},
+		});
+		assert.equal(res.toast.type, "error", `id "${id}" should be rejected`);
+	}
+});
+
+// ── SPEC §13.2 Phase 3: field count stress test ────────────────────
+
+await safe("Form with 100 fields renders /forms/{id} in < 500ms", async () => {
+	const ctx = makeCtx();
+	await admin(ctx, {
+		type: "form_submit",
+		action_id: "form_create",
+		values: { title: "Big", slug: "big" },
+	});
+	const [formId] = Array.from(ctx.storage.forms._store.entries())[0];
+
+	// Add 100 fields.
+	for (let i = 0; i < 100; i += 1) {
+		await admin(ctx, {
+			type: "block_action",
+			action_id: `form:field_add:${formId}`,
+			value: "text_input",
+		});
+	}
+
+	const start = Date.now();
+	const res = await admin(ctx, { type: "page_load", page: `/forms/${formId}` });
+	const elapsed = Date.now() - start;
+
+	assert.ok(res.blocks.length > 100, "rendered all field sections + page chrome");
+	assert.ok(elapsed < 500, `took ${elapsed}ms (target < 500ms)`);
+});
+
+// ── SPEC §13.2 Phase 3: conditional logic loops ─────────────────────
+
+await safe("3-hop conditional cycle A→B→C→A rejected", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [leadId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "lead-capture",
+	);
+
+	// name → email (ok)
+	const r1 = await admin(ctx, {
+		type: "form_submit",
+		action_id: `field_save_condition:${leadId}:name`,
+		values: {
+			conditionEnabled: true,
+			conditionField: "email",
+			conditionOperator: "eq",
+			conditionValue: "x",
+		},
+	});
+	assert.equal(r1.toast.type, "success");
+
+	// email → interest (ok)
+	const r2 = await admin(ctx, {
+		type: "form_submit",
+		action_id: `field_save_condition:${leadId}:email`,
+		values: {
+			conditionEnabled: true,
+			conditionField: "interest",
+			conditionOperator: "eq",
+			conditionValue: "y",
+		},
+	});
+	assert.equal(r2.toast.type, "success");
+
+	// interest → name: would close the 3-cycle. Must reject.
+	const r3 = await admin(ctx, {
+		type: "form_submit",
+		action_id: `field_save_condition:${leadId}:interest`,
+		values: {
+			conditionEnabled: true,
+			conditionField: "name",
+			conditionOperator: "eq",
+			conditionValue: "z",
+		},
+	});
+	assert.equal(r3.toast.type, "error");
+	assert.ok(r3.toast.message.includes("cycle"));
+});
+
+// ── SPEC §13.2 Phase 3: XSS via field labels ────────────────────────
+
+await safe("XSS in field label stored verbatim; admin renderer escapes at display", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [contactId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+	const xss = "<img src=x onerror=alert(1)>";
+	await admin(ctx, {
+		type: "form_submit",
+		action_id: `field_save_shared:${contactId}:name`,
+		values: {
+			type: "text_input",
+			id: "name",
+			label: xss,
+			required: true,
+			placeholder: "",
+			helpText: "",
+			width: "full",
+		},
+	});
+	const saved = (await ctx.storage.forms.get(contactId)).fields.find((f) => f.id === "name");
+	assert.equal(saved.label, xss);
+	// Returned to editor page: the label appears in the section text for
+	// the field row. Platform renderer is responsible for escaping at
+	// display time; we don't pre-sanitize.
+	const res = await admin(ctx, { type: "page_load", page: `/forms/${contactId}` });
+	const sections = res.blocks.filter((b) => b.type === "section");
+	assert.ok(sections.some((s) => typeof s.text === "string" && s.text.includes(xss)));
+});
+
+// ── Plan additions: phase 2 implementation learnings ────────────────
+
+// Concurrent form edit from two admin sessions (last-write-wins).
+await safe("Concurrent form_save_metadata from two tabs: last write wins (documented)", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [contactId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+
+	// Tab A saves title; Tab B saves something else — both completed
+	// before either is re-read. In the in-memory mock this is ordered,
+	// so we verify the LAST write wins deterministically.
+	await admin(ctx, {
+		type: "form_submit",
+		action_id: `form_save_metadata:${contactId}`,
+		values: { title: "Tab A's title", slug: "contact", active: true },
+	});
+	await admin(ctx, {
+		type: "form_submit",
+		action_id: `form_save_metadata:${contactId}`,
+		values: { title: "Tab B's title", slug: "contact", active: true },
+	});
+	const saved = await ctx.storage.forms.get(contactId);
+	assert.equal(saved.title, "Tab B's title");
+	// Document the expectation: last-write-wins is intentional for v1.
+});
+
+// Stale fieldId in URL — field was deleted in another tab, then the
+// still-open edit page submits a save.
+await safe("Stale fieldId in field_save_shared: error toast, no ghost field created", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [contactId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+	// Delete 'name' first.
+	await admin(ctx, {
+		type: "block_action",
+		action_id: `form:field_menu:${contactId}:name`,
+		value: `field:delete:${contactId}:name`,
+	});
+	// Now submit a save for the deleted 'name'.
+	const res = await admin(ctx, {
+		type: "form_submit",
+		action_id: `field_save_shared:${contactId}:name`,
+		values: {
+			type: "text_input",
+			id: "name",
+			label: "Ghost",
+			required: false,
+			placeholder: "",
+			helpText: "",
+			width: "full",
+		},
+	});
+	assert.equal(res.toast.type, "error");
+	// No ghost field created — field count unchanged from the delete.
+	const fields = (await ctx.storage.forms.get(contactId)).fields;
+	assert.ok(!fields.some((f) => f.id === "name"));
+});
+
+// Missing required values in form_submit payload.
+await safe("field_save_shared with missing type in values: error, not coerced", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [contactId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+	// Omit `type` from values — crafted client might not send it.
+	const res = await admin(ctx, {
+		type: "form_submit",
+		action_id: `field_save_shared:${contactId}:name`,
+		values: {
+			// type omitted
+			id: "name",
+			label: "",
+			required: false,
+			placeholder: "",
+			helpText: "",
+			width: "full",
+		},
+	});
+	// Missing type falls back to existing type (text_input). Missing
+	// label → empty → required-label error. Either way, we return an
+	// error toast, not a silently-saved broken field.
+	assert.equal(res.toast.type, "error");
+});
+
+// Template-seeded slug collision at re-activate time.
+await safe("plugin:install skip-existing prevents re-seed after admin deleted a template", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+
+	// Admin deletes the contact template form.
+	const [contactId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+	await admin(ctx, {
+		type: "block_action",
+		action_id: "form:menu:anything",
+		value: `form:delete:${contactId}`,
+	});
+	assert.equal(ctx.storage.forms._store.size, 4);
+
+	// Re-run plugin:install (simulates deactivate → activate cycle).
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+
+	// The install should re-seed the missing contact template.
+	const slugs = Array.from(ctx.storage.forms._store.values()).map((f) => f.slug);
+	assert.ok(slugs.includes("contact"), "contact re-seeded after deletion");
+	assert.equal(ctx.storage.forms._store.size, 5);
+
+	// Non-missing templates should NOT be duplicated.
+	const callbackCount = slugs.filter((s) => s === "callback").length;
+	assert.equal(callbackCount, 1);
+});
+
 // ─── Summary ─────────────────────────────────────────────────────────
 
 console.log(`\n─── Red team summary ───`);

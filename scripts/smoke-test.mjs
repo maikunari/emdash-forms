@@ -873,6 +873,293 @@ await scenario("export/csv returns error for unknown formId", async () => {
 	assert.equal(res.error, "Form not found");
 });
 
+// ═══ Phase 3 — Admin write path ═══════════════════════════════════════
+
+await scenario("admin /forms/new page renders with title + slug form", async () => {
+	const ctx = makeCtx();
+	const res = await admin(ctx, { type: "page_load", page: "/forms/new" });
+	const form = res.blocks.find((b) => b.type === "form" && b.block_id === "form-new");
+	assert.ok(form);
+	const fieldIds = form.fields.map((f) => f.action_id);
+	assert.deepEqual(fieldIds, ["title", "slug"]);
+});
+
+await scenario("form_create: happy path persists + navigates to /forms/{id}", async () => {
+	const ctx = makeCtx();
+	const res = await admin(ctx, {
+		type: "form_submit",
+		action_id: "form_create",
+		values: { title: "My Custom Form", slug: "" },
+	});
+	assert.equal(res.toast.message, 'Form "My Custom Form" created');
+	assert.equal(ctx.storage.forms._store.size, 1);
+	const stored = Array.from(ctx.storage.forms._store.values())[0];
+	assert.equal(stored.title, "My Custom Form");
+	assert.equal(stored.slug, "my-custom-form"); // auto-derived
+	assert.equal(stored.fields.length, 0);
+	assert.equal(stored.status, "active");
+});
+
+await scenario("form_create rejects blank title", async () => {
+	const ctx = makeCtx();
+	const res = await admin(ctx, {
+		type: "form_submit",
+		action_id: "form_create",
+		values: { title: "", slug: "" },
+	});
+	assert.equal(res.toast.type, "error");
+	assert.equal(ctx.storage.forms._store.size, 0);
+});
+
+await scenario("form_create rejects slug collision", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const res = await admin(ctx, {
+		type: "form_submit",
+		action_id: "form_create",
+		values: { title: "dupe", slug: "contact" },
+	});
+	assert.equal(res.toast.type, "error");
+	assert.ok(res.toast.message.includes("already exists"));
+});
+
+await scenario("admin /forms/{id} renders metadata + fields + behavior + notifications", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [contactId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+	const res = await admin(ctx, { type: "page_load", page: `/forms/${contactId}` });
+	const forms = res.blocks.filter((b) => b.type === "form");
+	const blockIds = forms.map((f) => f.block_id);
+	assert.ok(blockIds.includes("form-metadata"));
+	assert.ok(blockIds.includes("form-behavior"));
+	assert.ok(blockIds.includes("form-notifications"));
+});
+
+await scenario("form_save_metadata: title round-trip + field list shows updated label", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [contactId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+	await admin(ctx, {
+		type: "form_submit",
+		action_id: `form_save_metadata:${contactId}`,
+		values: { title: "Renamed Form", slug: "contact", active: true },
+	});
+	const saved = await ctx.storage.forms.get(contactId);
+	assert.equal(saved.title, "Renamed Form");
+
+	// Verify /forms/{id} shows the new title in the header.
+	const res = await admin(ctx, { type: "page_load", page: `/forms/${contactId}` });
+	const header = res.blocks.find((b) => b.type === "header");
+	assert.equal(header.text, "Renamed Form");
+});
+
+await scenario("new from template creates a form with a -N suffix on slug collision", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	await admin(ctx, {
+		type: "block_action",
+		action_id: "form:new_from_template",
+		value: "contact",
+	});
+	const slugs = Array.from(ctx.storage.forms._store.values()).map((f) => f.slug);
+	assert.ok(slugs.includes("contact-2"));
+});
+
+await scenario("add field appends a field with auto-generated id", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [contactId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+	const before = (await ctx.storage.forms.get(contactId)).fields.length;
+	await admin(ctx, {
+		type: "block_action",
+		action_id: `form:field_add:${contactId}`,
+		value: "select",
+	});
+	const after = (await ctx.storage.forms.get(contactId)).fields;
+	assert.equal(after.length, before + 1);
+	const added = after[after.length - 1];
+	assert.equal(added.type, "select");
+	assert.equal(added.id, "select_1");
+});
+
+await scenario("field move_top moves a field to position 0", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [contactId, form] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+	const messageId = form.fields.find((f) => f.id === "message").id;
+	await admin(ctx, {
+		type: "block_action",
+		action_id: `form:field_menu:${contactId}:${messageId}`,
+		value: `field:move_top:${contactId}:${messageId}`,
+	});
+	const after = (await ctx.storage.forms.get(contactId)).fields;
+	assert.equal(after[0].id, "message");
+});
+
+await scenario("field delete is idempotent on already-deleted field", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [contactId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+	await admin(ctx, {
+		type: "block_action",
+		action_id: `form:field_menu:${contactId}:message`,
+		value: `field:delete:${contactId}:message`,
+	});
+	const res = await admin(ctx, {
+		type: "block_action",
+		action_id: `form:field_menu:${contactId}:message`,
+		value: `field:delete:${contactId}:message`,
+	});
+	assert.equal(res.toast.type, "info");
+	assert.equal(res.toast.message, "Field already deleted");
+});
+
+await scenario("field editor shared save: label round-trip visible in form builder", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [contactId] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	);
+	await admin(ctx, {
+		type: "form_submit",
+		action_id: `field_save_shared:${contactId}:name`,
+		values: {
+			type: "text_input",
+			id: "name",
+			label: "Full legal name",
+			required: true,
+			placeholder: "",
+			helpText: "",
+			width: "full",
+		},
+	});
+	const saved = (await ctx.storage.forms.get(contactId)).fields.find((f) => f.id === "name");
+	assert.equal(saved.label, "Full legal name");
+
+	// Round-trip back to /forms/{id}, check field list shows the new label.
+	const res = await admin(ctx, { type: "page_load", page: `/forms/${contactId}` });
+	const sections = res.blocks.filter(
+		(b) =>
+			b.type === "section" &&
+			b.accessory?.type === "overflow" &&
+			b.accessory.action_id.startsWith("form:field_menu"),
+	);
+	assert.ok(
+		sections.some((s) => s.text.includes("Full legal name")),
+		"updated label shown in field list",
+	);
+});
+
+await scenario("field type change discards type-specific settings", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [leadId, leadForm] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "lead-capture",
+	);
+	const interestId = leadForm.fields.find((f) => f.type === "select").id;
+
+	await admin(ctx, {
+		type: "form_submit",
+		action_id: `field_save_shared:${leadId}:${interestId}`,
+		values: {
+			type: "text_input",
+			id: interestId,
+			label: "Notes",
+			required: false,
+			placeholder: "",
+			helpText: "",
+			width: "full",
+		},
+	});
+	const after = (await ctx.storage.forms.get(leadId)).fields.find((f) => f.id === interestId);
+	assert.equal(after.type, "text_input");
+	assert.equal(after.options, undefined);
+	assert.equal(after.inputType, "text");
+});
+
+await scenario("save condition: eq round-trips", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [leadId, leadForm] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "lead-capture",
+	);
+	const companyId = leadForm.fields.find((f) => f.id === "company").id;
+	await admin(ctx, {
+		type: "form_submit",
+		action_id: `field_save_condition:${leadId}:${companyId}`,
+		values: {
+			conditionEnabled: true,
+			conditionField: "interest",
+			conditionOperator: "eq",
+			conditionValue: "demo",
+		},
+	});
+	const saved = (await ctx.storage.forms.get(leadId)).fields.find((f) => f.id === companyId);
+	assert.deepEqual(saved.condition, { field: "interest", eq: "demo" });
+});
+
+await scenario("save condition rejects 2-cycle", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const [leadId, leadForm] = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "lead-capture",
+	);
+	const companyId = "company";
+	const interestId = "interest";
+
+	// Set company → interest first
+	await admin(ctx, {
+		type: "form_submit",
+		action_id: `field_save_condition:${leadId}:${companyId}`,
+		values: {
+			conditionEnabled: true,
+			conditionField: interestId,
+			conditionOperator: "eq",
+			conditionValue: "demo",
+		},
+	});
+	// Now try to close the cycle with interest → company
+	const res = await admin(ctx, {
+		type: "form_submit",
+		action_id: `field_save_condition:${leadId}:${interestId}`,
+		values: {
+			conditionEnabled: true,
+			conditionField: companyId,
+			conditionOperator: "eq",
+			conditionValue: "x",
+		},
+	});
+	assert.equal(res.toast.type, "error");
+	assert.ok(res.toast.message.includes("cycle"));
+});
+
+await scenario("no-email-provider banner: shown when needed, hidden otherwise", async () => {
+	// Banner: no provider + at least one form wants email
+	const a = makeCtx();
+	a.email = undefined;
+	await plugin.hooks["plugin:install"].handler({}, a);
+	const ra = await admin(a, { type: "page_load", page: "/" });
+	const aBanner = ra.blocks.find((b) => b.type === "banner" && b.variant === "alert");
+	assert.ok(aBanner);
+	assert.equal(aBanner.title, "Email notifications are disabled");
+
+	// No banner: provider present
+	const b = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, b);
+	const rb = await admin(b, { type: "page_load", page: "/" });
+	assert.ok(!rb.blocks.some((block) => block.type === "banner" && block.variant === "alert"));
+});
+
 // ─── Summary ─────────────────────────────────────────────────────────
 
 const failed = results.filter((r) => !r.pass);

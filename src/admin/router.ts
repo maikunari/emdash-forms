@@ -18,6 +18,35 @@ import {
 	deleteSubmissionAction,
 	pauseFormAction,
 } from "./actions.js";
+import {
+	addField,
+	deleteField,
+	duplicateField,
+	moveField,
+} from "./field-actions.js";
+import {
+	saveFieldCheckbox,
+	saveFieldCondition,
+	saveFieldDate,
+	saveFieldEmail,
+	saveFieldHidden,
+	saveFieldMultiSelect,
+	saveFieldNumber,
+	saveFieldRadio,
+	saveFieldSelect,
+	saveFieldShared,
+	saveFieldTextInput,
+	saveFieldTextarea,
+} from "./field-save.js";
+import { buildFieldEditPage } from "./pages/field-edit.js";
+import {
+	createFormFromTemplate,
+	saveFormBehavior,
+	saveFormMetadata,
+	saveFormNotifications,
+} from "./form-save.js";
+import { buildFormEditPage } from "./pages/form-edit.js";
+import { buildFormNewPage, createFormAction } from "./pages/form-new.js";
 import { buildFormsListPage } from "./pages/forms-list.js";
 import {
 	buildSettingsPage,
@@ -46,6 +75,40 @@ export interface BlockResponse {
 	blocks: readonly unknown[];
 	toast?: { message: string; type: "success" | "error" | "info" };
 }
+
+// ─── Field save handler dispatch table ───────────────────────────────
+//
+// Keyed by the `{kind}` in `field_save_{kind}:{formId}:{fieldId}`. The
+// `shared` handler covers the always-visible fields (type, id, label,
+// required, …). The other ten cover type-specific settings — one per
+// field type. Email's handler is a no-op (no type-specific settings)
+// but is present so the router's parse-once dispatch is uniform.
+
+type FieldSaveHandler = (
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	values: Record<string, unknown>,
+) => Promise<BlockResponse>;
+
+/** Email save takes no values; wrap to match FieldSaveHandler signature. */
+const saveFieldEmailAdapter: FieldSaveHandler = (ctx, formId, fieldId) =>
+	saveFieldEmail(ctx, formId, fieldId);
+
+const FIELD_SAVE_HANDLERS: Record<string, FieldSaveHandler> = {
+	shared: saveFieldShared,
+	condition: saveFieldCondition,
+	text_input: saveFieldTextInput,
+	email: saveFieldEmailAdapter,
+	textarea: saveFieldTextarea,
+	select: saveFieldSelect,
+	multi_select: saveFieldMultiSelect,
+	checkbox: saveFieldCheckbox,
+	radio: saveFieldRadio,
+	number: saveFieldNumber,
+	date: saveFieldDate,
+	hidden: saveFieldHidden,
+};
 
 // ─── Page dispatcher ─────────────────────────────────────────────────
 
@@ -115,6 +178,52 @@ interface Interaction {
 }
 
 // ─── Placeholder builder ─────────────────────────────────────────────
+
+/**
+ * Dispatch a field-row action from the form-edit page. Value shape:
+ *   field:{action}:{formId}:{fieldId}
+ * where action ∈ { move_top, move_up, move_down, move_bottom, edit,
+ *                  duplicate, delete }.
+ */
+async function dispatchFieldOverflow(
+	ctx: PluginContext,
+	selected: string,
+): Promise<BlockResponse> {
+	// Parse: strip leading "field:", split off action, remaining is
+	// formId:fieldId (fieldId may contain internal underscores but not
+	// colons — our field id regex forbids them).
+	const withoutPrefix = selected.slice("field:".length);
+	const firstColon = withoutPrefix.indexOf(":");
+	if (firstColon === -1) return placeholder(`field-overflow:${selected}`);
+	const action = withoutPrefix.slice(0, firstColon);
+	const rest = withoutPrefix.slice(firstColon + 1);
+	const secondColon = rest.indexOf(":");
+	if (secondColon === -1) return placeholder(`field-overflow:${selected}`);
+	const formId = rest.slice(0, secondColon);
+	const fieldId = rest.slice(secondColon + 1);
+
+	switch (action) {
+		case "move_top":
+			return moveField(ctx, formId, fieldId, "top");
+		case "move_up":
+			return moveField(ctx, formId, fieldId, "up");
+		case "move_down":
+			return moveField(ctx, formId, fieldId, "down");
+		case "move_bottom":
+			return moveField(ctx, formId, fieldId, "bottom");
+		case "duplicate":
+			return duplicateField(ctx, formId, fieldId);
+		case "delete":
+			return deleteField(ctx, formId, fieldId);
+		case "edit":
+			return dispatchAdminInteraction(ctx, {
+				type: "page_load",
+				page: `/forms/${formId}/fields/${fieldId}`,
+			});
+		default:
+			return placeholder(`field-overflow:${action}`);
+	}
+}
 
 /**
  * Dispatch a form-row action — either the overflow-menu selected value
@@ -203,8 +312,11 @@ export async function dispatchAdminInteraction(
 			case "submission-detail":
 				return buildSubmissionDetailPage(pluginCtx, match.submissionId);
 			case "form-new":
+				return buildFormNewPage();
 			case "form-edit":
+				return buildFormEditPage(pluginCtx, match.formId);
 			case "field-edit":
+				return buildFieldEditPage(pluginCtx, match.formId, match.fieldId);
 			case "unknown":
 				return placeholder(match.kind);
 		}
@@ -213,15 +325,48 @@ export async function dispatchAdminInteraction(
 	// form_submit → action handlers
 	if (interaction.type === "form_submit") {
 		const values = interaction.values ?? {};
-		switch (interaction.action_id) {
+		const actionId = interaction.action_id ?? "";
+		switch (actionId) {
 			case "save_settings_email":
 				return saveEmailSettings(pluginCtx, values);
 			case "save_settings_retention":
 				return saveRetentionSettings(pluginCtx, values);
 			case "save_settings_turnstile":
 				return saveTurnstileSettings(pluginCtx, values);
+			case "form_create":
+				return createFormAction(pluginCtx, values);
 		}
-		return placeholder(`form_submit:${interaction.action_id ?? "unknown"}`);
+
+		// Form-edit save handlers — action ids carry the formId suffix
+		// so the handler knows which form to update.
+		if (actionId.startsWith("form_save_metadata:")) {
+			return saveFormMetadata(pluginCtx, actionId.slice("form_save_metadata:".length), values);
+		}
+		if (actionId.startsWith("form_save_behavior:")) {
+			return saveFormBehavior(pluginCtx, actionId.slice("form_save_behavior:".length), values);
+		}
+		if (actionId.startsWith("form_save_notifications:")) {
+			return saveFormNotifications(
+				pluginCtx,
+				actionId.slice("form_save_notifications:".length),
+				values,
+			);
+		}
+
+		// Field editor save handlers — action ids follow
+		//   field_save_{kind}:{formId}:{fieldId}
+		// where kind ∈ { shared, text_input, email, textarea, select,
+		// multi_select, checkbox, radio, number, date, hidden }. The
+		// formId + fieldId are colon-delimited but fieldId can itself
+		// contain neither colons (per FIELD_ID_REGEX) nor slashes.
+		const fieldSaveMatch = /^field_save_([a-z_]+):([^:]+):(.+)$/.exec(actionId);
+		if (fieldSaveMatch) {
+			const [, kind, formId, fieldId] = fieldSaveMatch;
+			const dispatch = FIELD_SAVE_HANDLERS[kind!];
+			if (dispatch) return dispatch(pluginCtx, formId!, fieldId!, values);
+		}
+
+		return placeholder(`form_submit:${actionId}`);
 	}
 
 	// block_action → action handlers
@@ -268,6 +413,32 @@ export async function dispatchAdminInteraction(
 			const selected = typeof interaction.value === "string" ? interaction.value : "";
 			return dispatchFormOverflow(pluginCtx, selected);
 		}
+		// "New from template" dropdown — picked value is the template id.
+		if (actionId === "form:new_from_template") {
+			const templateId = typeof interaction.value === "string" ? interaction.value : "";
+			return createFormFromTemplate(pluginCtx, templateId);
+		}
+
+		// ── Field mutations on /forms/{id} ───────────────────────
+		// Add field: select action fires `form:field_add:{formId}`
+		// with the picked field type in interaction.value.
+		if (actionId.startsWith("form:field_add:")) {
+			const formId = actionId.slice("form:field_add:".length);
+			const type = typeof interaction.value === "string" ? interaction.value : "";
+			return addField(pluginCtx, formId, type);
+		}
+		// Field overflow menu: `form:field_menu:{formId}:{fieldId}`
+		// with a specific action in interaction.value.
+		if (actionId.startsWith("form:field_menu:")) {
+			const selected = typeof interaction.value === "string" ? interaction.value : "";
+			return dispatchFieldOverflow(pluginCtx, selected);
+		}
+		// Direct field:* action — used when a confirm dialog fires
+		// the underlying action id rather than going through the menu.
+		if (actionId.startsWith("field:")) {
+			return dispatchFieldOverflow(pluginCtx, actionId);
+		}
+
 		// Direct form:* actions (e.g. from confirm dialogs in future).
 		if (actionId.startsWith("form:")) {
 			return dispatchFormOverflow(pluginCtx, actionId);
