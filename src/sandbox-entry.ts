@@ -14,6 +14,7 @@ import { definePlugin } from "emdash";
 import type { PluginContext, RouteContext } from "emdash";
 
 import { dispatchAdminInteraction } from "./admin/router.js";
+import { exportCsvHandler } from "./handlers/export-csv.js";
 import { handleActivate, handleCron, handleInstall } from "./handlers/lifecycle.js";
 import { submitHandler } from "./handlers/submit.js";
 import {
@@ -22,7 +23,7 @@ import {
 	interactionSchema,
 	submitSchema,
 } from "./validation.js";
-import type { SubmitInput } from "./validation.js";
+import type { ExportCsvInput, SubmitInput } from "./validation.js";
 
 // NOTE: SPEC-v1 §3.1 specifies composite indexes (["formId", "createdAt"],
 // ["formId", "status"]) on the submissions collection. The emdash 0.5.0
@@ -93,12 +94,11 @@ export default definePlugin({
 			},
 		},
 
-		/** SPEC §4.4 — GET export/csv (auth required). TODO later in Phase 2. */
+		/** SPEC §4.4 — GET export/csv (auth required). */
 		"export/csv": {
 			input: exportCsvSchema,
-			handler: async (ctx: RouteContext<unknown>) => {
-				ctx.log.info("[emdash-forms] route:export/csv — TODO (Phase 2)");
-				return { ok: false, error: "not implemented (Phase 2)" };
+			handler: async (ctx: RouteContext<ExportCsvInput>) => {
+				return exportCsvHandler(ctx);
 			},
 		},
 	},
