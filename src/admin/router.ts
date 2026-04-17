@@ -24,6 +24,8 @@ import {
 	duplicateField,
 	moveField,
 } from "./field-actions.js";
+import { saveFieldSelect, saveFieldShared } from "./field-save.js";
+import { buildFieldEditPage } from "./pages/field-edit.js";
 import {
 	createFormFromTemplate,
 	saveFormBehavior,
@@ -267,6 +269,7 @@ export async function dispatchAdminInteraction(
 			case "form-edit":
 				return buildFormEditPage(pluginCtx, match.formId);
 			case "field-edit":
+				return buildFieldEditPage(pluginCtx, match.formId, match.fieldId);
 			case "unknown":
 				return placeholder(match.kind);
 		}
@@ -301,6 +304,26 @@ export async function dispatchAdminInteraction(
 				actionId.slice("form_save_notifications:".length),
 				values,
 			);
+		}
+
+		// Field editor save handlers — action ids carry both formId
+		// and fieldId. Parse the tail once.
+		if (
+			actionId.startsWith("field_save_shared:") ||
+			actionId.startsWith("field_save_select:")
+		) {
+			const [, tail] = actionId.split(/^field_save_(?:shared|select):/);
+			const firstColon = (tail ?? "").indexOf(":");
+			if (firstColon !== -1 && tail) {
+				const formId = tail.slice(0, firstColon);
+				const fieldId = tail.slice(firstColon + 1);
+				if (actionId.startsWith("field_save_shared:")) {
+					return saveFieldShared(pluginCtx, formId, fieldId, values);
+				}
+				if (actionId.startsWith("field_save_select:")) {
+					return saveFieldSelect(pluginCtx, formId, fieldId, values);
+				}
+			}
 		}
 
 		return placeholder(`form_submit:${actionId}`);
