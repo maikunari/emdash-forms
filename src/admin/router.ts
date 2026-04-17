@@ -12,6 +12,12 @@
 
 import type { PluginContext, RouteContext } from "emdash";
 
+import {
+	activateFormAction,
+	deleteFormAction,
+	deleteSubmissionAction,
+	pauseFormAction,
+} from "./actions.js";
 import { buildFormsListPage } from "./pages/forms-list.js";
 import {
 	buildSettingsPage,
@@ -109,6 +115,40 @@ interface Interaction {
 }
 
 // ─── Placeholder builder ─────────────────────────────────────────────
+
+/**
+ * Dispatch a form-row action — either the overflow-menu selected value
+ * (e.g. "form:delete:{id}") or a direct action_id of the same shape.
+ */
+async function dispatchFormOverflow(
+	ctx: PluginContext,
+	selected: string,
+): Promise<BlockResponse> {
+	if (selected.startsWith("form:submissions:")) {
+		const formId = selected.slice("form:submissions:".length);
+		return dispatchAdminInteraction(ctx, {
+			type: "page_load",
+			page: `/forms/${formId}/submissions`,
+		});
+	}
+	if (selected.startsWith("form:edit:")) {
+		const formId = selected.slice("form:edit:".length);
+		return dispatchAdminInteraction(ctx, {
+			type: "page_load",
+			page: `/forms/${formId}`,
+		});
+	}
+	if (selected.startsWith("form:pause:")) {
+		return pauseFormAction(ctx, selected.slice("form:pause:".length));
+	}
+	if (selected.startsWith("form:activate:")) {
+		return activateFormAction(ctx, selected.slice("form:activate:".length));
+	}
+	if (selected.startsWith("form:delete:")) {
+		return deleteFormAction(ctx, selected.slice("form:delete:".length));
+	}
+	return placeholder(`form-overflow:${selected}`);
+}
 
 function placeholder(kind: string): BlockResponse {
 	return {
@@ -216,6 +256,21 @@ export async function dispatchAdminInteraction(
 		if (actionId.startsWith("submission:view:")) {
 			const id = actionId.slice("submission:view:".length);
 			return buildSubmissionDetailPage(pluginCtx, id);
+		}
+		if (actionId.startsWith("submission:delete:")) {
+			return deleteSubmissionAction(pluginCtx, actionId.slice("submission:delete:".length));
+		}
+
+		// Form row actions (fired from the forms-list overflow menu).
+		// Overflow interactions arrive as `form:menu:{id}` with the
+		// selected option's value in interaction.value.
+		if (actionId.startsWith("form:menu:")) {
+			const selected = typeof interaction.value === "string" ? interaction.value : "";
+			return dispatchFormOverflow(pluginCtx, selected);
+		}
+		// Direct form:* actions (e.g. from confirm dialogs in future).
+		if (actionId.startsWith("form:")) {
+			return dispatchFormOverflow(pluginCtx, actionId);
 		}
 
 		return placeholder(`block_action:${actionId}`);
