@@ -72,8 +72,14 @@ function makeCollection() {
 				});
 			}
 			const limit = opts.limit ?? 50;
-			const sliced = items.slice(0, limit);
-			return { items: sliced, hasMore: items.length > limit, cursor: undefined };
+			const offset = opts.cursor ? Number.parseInt(opts.cursor, 10) || 0 : 0;
+			const sliced = items.slice(offset, offset + limit);
+			const hasMore = items.length > offset + limit;
+			return {
+				items: sliced,
+				hasMore,
+				cursor: hasMore ? String(offset + limit) : undefined,
+			};
 		},
 		async count(where) {
 			return (await this.query({ where })).items.length;
@@ -466,6 +472,405 @@ await scenario("cron retention-cleanup deletes old submissions", async () => {
 
 	assert.equal(ctx.storage.submissions._store.size, 1);
 	assert.ok(ctx.storage.submissions._store.has("new-1"));
+});
+
+// ─── Phase 2 — Admin read path ───────────────────────────────────────
+
+/** Dispatch an admin interaction against the mocked ctx. */
+async function admin(ctx, interaction) {
+	return plugin.routes.admin.handler({
+		...ctx,
+		input: interaction,
+		request: new Request("http://localhost/admin", { method: "POST" }),
+		requestMeta: { ip: null, userAgent: null, referer: null, geo: null },
+	});
+}
+
+await scenario("admin / (forms list) renders stats + per-form rows after install", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const res = await admin(ctx, { type: "page_load", page: "/" });
+
+	assert.ok(Array.isArray(res.blocks));
+	const headerBlock = res.blocks.find((b) => b.type === "header");
+	assert.ok(headerBlock);
+	assert.equal(headerBlock.text, "Forms");
+
+	const statsBlock = res.blocks.find((b) => b.type === "stats");
+	assert.ok(statsBlock);
+	const formsStat = statsBlock.stats.find((s) => s.label === "Forms");
+	assert.equal(formsStat.value, "5");
+
+	// One section per seeded form (5), each followed by a divider.
+	const sectionCount = res.blocks.filter((b) => b.type === "section").length;
+	assert.equal(sectionCount, 5);
+});
+
+await scenario("admin / empty state shows 'No forms yet' banner", async () => {
+	const ctx = makeCtx();
+	// No install → no seeded forms.
+	const res = await admin(ctx, { type: "page_load", page: "/" });
+	const banner = res.blocks.find((b) => b.type === "banner");
+	assert.ok(banner);
+	assert.equal(banner.title, "No forms yet");
+});
+
+await scenario("admin /settings renders three save forms with initial values", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	await ctx.kv.set("settings:defaultAdminEmail", "admin@example.com");
+
+	const res = await admin(ctx, { type: "page_load", page: "/settings" });
+	const forms = res.blocks.filter((b) => b.type === "form");
+	assert.equal(forms.length, 3);
+
+	const emailForm = forms.find((f) => f.block_id === "settings-email");
+	const emailField = emailForm.fields.find((f) => f.action_id === "defaultAdminEmail");
+	assert.equal(emailField.initial_value, "admin@example.com");
+
+	const retentionForm = forms.find((f) => f.block_id === "settings-retention");
+	const retentionField = retentionForm.fields.find((f) => f.action_id === "retentionDays");
+	assert.equal(retentionField.initial_value, 365);
+});
+
+await scenario("admin /settings save_settings_retention clamps out-of-range values", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+
+	// Well above the 3650 max.
+	const res = await admin(ctx, {
+		type: "form_submit",
+		action_id: "save_settings_retention",
+		values: { retentionDays: 999999 },
+	});
+	assert.equal(res.toast.type, "success");
+	const saved = await ctx.kv.get("settings:retentionDays");
+	assert.equal(saved, 3650); // clamped
+});
+
+await scenario("admin /settings Turnstile secret rotation preserves existing value on empty", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	await ctx.kv.set("settings:turnstileSecretKey", "pre-existing");
+
+	await admin(ctx, {
+		type: "form_submit",
+		action_id: "save_settings_turnstile",
+		values: { turnstileSiteKey: "0xSITE", turnstileSecretKey: "" },
+	});
+
+	assert.equal(await ctx.kv.get("settings:turnstileSecretKey"), "pre-existing");
+	assert.equal(await ctx.kv.get("settings:turnstileSiteKey"), "0xSITE");
+});
+
+await scenario("admin /submissions renders an empty state pre-submission", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const res = await admin(ctx, { type: "page_load", page: "/submissions" });
+	const banner = res.blocks.find((b) => b.type === "banner");
+	assert.ok(banner);
+	assert.equal(banner.title, "No submissions yet");
+});
+
+await scenario("admin /submissions renders table with rows after submit", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	await ctx.kv.set("settings:defaultAdminEmail", "admin@x.com");
+
+	// Submit three to the contact form.
+	for (const name of ["Alice", "Bob", "Carol"]) {
+		await plugin.routes.submit.handler(
+			makeRouteCtx(ctx, {
+				formSlug: "contact",
+				data: { name, email: `${name.toLowerCase()}@test.com`, message: "hi" },
+			}),
+		);
+	}
+
+	const res = await admin(ctx, { type: "page_load", page: "/submissions" });
+	const table = res.blocks.find((b) => b.type === "table");
+	assert.ok(table);
+	assert.equal(table.rows.length, 3);
+	assert.ok(table.columns.some((c) => c.key === "form"), "cross-form view has form column");
+});
+
+await scenario("admin /forms/{id}/submissions filters to one form, shows Export button", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+
+	// Submit to two different forms.
+	await plugin.routes.submit.handler(
+		makeRouteCtx(ctx, {
+			formSlug: "contact",
+			data: { name: "Alice", email: "a@x.com", message: "hi" },
+		}),
+	);
+	await plugin.routes.submit.handler(
+		makeRouteCtx(ctx, {
+			formSlug: "callback",
+			data: { name: "Bob", phone: "+1", preferredTime: "morning" },
+		}),
+	);
+
+	const contactId = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	)[0];
+
+	const res = await admin(ctx, {
+		type: "page_load",
+		page: `/forms/${contactId}/submissions`,
+	});
+
+	const table = res.blocks.find((b) => b.type === "table");
+	assert.equal(table.rows.length, 1, "only contact submissions");
+	// Header shouldn't include a form column when filtered.
+	assert.ok(!table.columns.some((c) => c.key === "form"));
+
+	// Export button with the correct URL.
+	const actionBlock = res.blocks.find((b) => b.type === "actions");
+	const exportBtn = actionBlock.elements.find((e) => e.text === "Export CSV");
+	assert.ok(exportBtn.url.includes(`formId=${contactId}`));
+});
+
+await scenario("admin submission pagination: cursor in value reloads with next page", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+
+	// Seed > PAGE_SIZE (25) to trigger pagination. We write directly
+	// to storage to avoid 30x submit-handler calls.
+	const contactId = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	)[0];
+	for (let i = 0; i < 30; i++) {
+		await ctx.storage.submissions.put(`s-${i}`, {
+			formId: contactId,
+			data: { name: `n${i}`, email: `n${i}@x.com`, message: "m" },
+			meta: {},
+			status: "new",
+			createdAt: new Date(Date.now() - i * 1000).toISOString(),
+		});
+	}
+
+	const page1 = await admin(ctx, { type: "page_load", page: "/submissions" });
+	const table1 = page1.blocks.find((b) => b.type === "table");
+	assert.equal(table1.rows.length, 25);
+	assert.ok(table1.nextCursor, "page 1 has nextCursor");
+	assert.equal(table1.pageActionId, "submissions:page");
+});
+
+await scenario("admin submission:view navigates to detail page", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	await plugin.routes.submit.handler(
+		makeRouteCtx(ctx, {
+			formSlug: "contact",
+			data: { name: "Jane", email: "j@e.com", message: "hi" },
+		}),
+	);
+	const subId = Array.from(ctx.storage.submissions._store.keys())[0];
+
+	const res = await admin(ctx, {
+		type: "block_action",
+		action_id: `submission:view:${subId}`,
+	});
+	const header = res.blocks.find((b) => b.type === "header");
+	assert.ok(header.text.includes("Contact Form"));
+});
+
+await scenario("admin submission:read flips status from new to read", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	await plugin.routes.submit.handler(
+		makeRouteCtx(ctx, {
+			formSlug: "contact",
+			data: { name: "Jane", email: "j@e.com", message: "hi" },
+		}),
+	);
+	const subId = Array.from(ctx.storage.submissions._store.keys())[0];
+
+	const res = await admin(ctx, {
+		type: "block_action",
+		action_id: `submission:read:${subId}`,
+	});
+	assert.equal(res.toast.message, "Marked as read");
+
+	const sub = await ctx.storage.submissions.get(subId);
+	assert.equal(sub.status, "read");
+});
+
+await scenario("admin submission:read is idempotent on already-read submissions", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	await plugin.routes.submit.handler(
+		makeRouteCtx(ctx, {
+			formSlug: "contact",
+			data: { name: "Jane", email: "j@e.com", message: "hi" },
+		}),
+	);
+	const subId = Array.from(ctx.storage.submissions._store.keys())[0];
+
+	await admin(ctx, { type: "block_action", action_id: `submission:read:${subId}` });
+	const res = await admin(ctx, {
+		type: "block_action",
+		action_id: `submission:read:${subId}`,
+	});
+	assert.equal(res.toast.type, "info");
+	assert.equal(res.toast.message, "Already marked as read");
+});
+
+await scenario("admin submission:delete removes the submission", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	await plugin.routes.submit.handler(
+		makeRouteCtx(ctx, {
+			formSlug: "contact",
+			data: { name: "Jane", email: "j@e.com", message: "hi" },
+		}),
+	);
+	const subId = Array.from(ctx.storage.submissions._store.keys())[0];
+
+	const res = await admin(ctx, {
+		type: "block_action",
+		action_id: `submission:delete:${subId}`,
+	});
+	assert.equal(res.toast.message, "Submission deleted");
+	assert.equal(ctx.storage.submissions._store.size, 0);
+});
+
+await scenario("admin form:pause toggles status to paused (info toast on second call)", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const contactId = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	)[0];
+
+	const res1 = await admin(ctx, {
+		type: "block_action",
+		action_id: "form:menu:anything",
+		value: `form:pause:${contactId}`,
+	});
+	assert.equal(res1.toast.message, "Form paused");
+	const form1 = await ctx.storage.forms.get(contactId);
+	assert.equal(form1.status, "paused");
+
+	const res2 = await admin(ctx, {
+		type: "block_action",
+		action_id: "form:menu:anything",
+		value: `form:pause:${contactId}`,
+	});
+	assert.equal(res2.toast.type, "info");
+});
+
+await scenario("admin form:delete cascades to all submissions", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const contactId = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	)[0];
+
+	// Seed 10 submissions for contact and 3 for another form.
+	const callbackId = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "callback",
+	)[0];
+	for (let i = 0; i < 10; i++) {
+		await ctx.storage.submissions.put(`c-${i}`, {
+			formId: contactId,
+			data: {},
+			meta: {},
+			status: "new",
+			createdAt: new Date().toISOString(),
+		});
+	}
+	for (let i = 0; i < 3; i++) {
+		await ctx.storage.submissions.put(`k-${i}`, {
+			formId: callbackId,
+			data: {},
+			meta: {},
+			status: "new",
+			createdAt: new Date().toISOString(),
+		});
+	}
+
+	const res = await admin(ctx, {
+		type: "block_action",
+		action_id: "form:menu:anything",
+		value: `form:delete:${contactId}`,
+	});
+
+	assert.ok(res.toast.message.includes("10 submissions"));
+	assert.equal(await ctx.storage.forms.get(contactId), null);
+
+	// Only the callback submissions survive.
+	assert.equal(ctx.storage.submissions._store.size, 3);
+	for (const [id] of ctx.storage.submissions._store) {
+		assert.ok(id.startsWith("k-"));
+	}
+});
+
+await scenario("admin form:delete is idempotent on already-deleted form", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const contactId = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	)[0];
+
+	await admin(ctx, {
+		type: "block_action",
+		action_id: "form:menu:anything",
+		value: `form:delete:${contactId}`,
+	});
+	const res = await admin(ctx, {
+		type: "block_action",
+		action_id: "form:menu:anything",
+		value: `form:delete:${contactId}`,
+	});
+	assert.equal(res.toast.type, "info");
+	assert.equal(res.toast.message, "Form already deleted");
+});
+
+// ─── Phase 2 — CSV export ────────────────────────────────────────────
+
+await scenario("export/csv returns CSV with formula-injection guard", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const contactId = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	)[0];
+
+	// Seed a submission with a formula-injection payload.
+	await ctx.storage.submissions.put("s1", {
+		formId: contactId,
+		data: { name: "=SUM(A1)", email: "j@e.com", message: "hello" },
+		meta: { ip: "192.0.2.1" },
+		status: "new",
+		createdAt: "2026-01-01T00:00:00.000Z",
+	});
+
+	const res = await plugin.routes["export/csv"].handler({
+		...ctx,
+		input: { formId: contactId },
+		request: new Request("http://localhost/export", { method: "GET" }),
+		requestMeta: { ip: null, userAgent: null, referer: null, geo: null },
+	});
+
+	assert.equal(res.contentType, "text/csv");
+	assert.ok(res.filename.includes("contact"));
+	assert.ok(res.data.includes("\r\n"), "CRLF line endings");
+	// Formula-injection guard: =SUM( must have a leading ' prefix.
+	// Escaped inside RFC 4180 quotes because the cell contains `=`.
+	assert.ok(res.data.includes("'=SUM(A1)"), "formula-injection guard prefix");
+});
+
+await scenario("export/csv returns error for unknown formId", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const res = await plugin.routes["export/csv"].handler({
+		...ctx,
+		input: { formId: "nonexistent" },
+		request: new Request("http://localhost/export"),
+		requestMeta: { ip: null, userAgent: null, referer: null, geo: null },
+	});
+	assert.equal(res.error, "Form not found");
 });
 
 // ─── Summary ─────────────────────────────────────────────────────────

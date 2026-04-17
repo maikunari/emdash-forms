@@ -156,11 +156,19 @@ export async function deleteFormAction(
 }
 
 /**
- * Delete every submission belonging to the form. Paginated; returns
- * the count deleted. Callers should not rely on atomicity — if this
- * fails partway, the form still gets deleted and a retention cleanup
- * pass will sweep up the orphans eventually (they'll match
- * createdAt < retention cutoff regardless of formId).
+ * Delete every submission belonging to the form. Callers should not
+ * rely on atomicity — if this fails partway, the form still gets
+ * deleted and a retention cleanup pass will sweep up the orphans
+ * eventually (they'll match createdAt < retention cutoff regardless
+ * of formId).
+ *
+ * Important: we re-query from scratch on each iteration rather than
+ * paginating with a cursor. Cursor semantics across deletes are
+ * implementation-dependent (offset-based cursors become invalid after
+ * items shift; id-based cursors might skip items depending on order).
+ * Re-querying the first page each time converges cleanly — every
+ * remaining submission bubbles up to page 1 as its predecessors are
+ * deleted. Worst case: O(N/batch) queries, same as cursor pagination.
  */
 async function cascadeDeleteSubmissions(
 	submissions: StorageCollection<Submission>,
@@ -168,30 +176,42 @@ async function cascadeDeleteSubmissions(
 	ctx: PluginContext,
 ): Promise<number> {
 	let deleted = 0;
-	let cursor: string | undefined;
+	// Safety valve: bail after a pathological number of iterations so
+	// a bug in the storage layer can't spin forever.
+	const MAX_ITERATIONS = 1000;
 
-	do {
+	for (let iter = 0; iter < MAX_ITERATIONS; iter += 1) {
 		const page = await submissions.query({
 			where: { formId },
 			limit: CASCADE_BATCH_SIZE,
-			cursor,
 		});
-		if (page.items.length === 0) break;
+		if (page.items.length === 0) return deleted;
 
 		const ids = page.items.map((item) => item.id);
 		const batchDeleted = await submissions.deleteMany(ids);
 		deleted += batchDeleted;
-
-		// If the page had fewer items than limit, we're done.
-		if (!page.cursor || page.items.length < CASCADE_BATCH_SIZE) break;
-		cursor = page.cursor;
 
 		ctx.log.info("[emdash-forms] cascade-delete in progress", {
 			formId,
 			batchDeleted,
 			totalDeleted: deleted,
 		});
-	} while (cursor);
 
+		// Protective: if deleteMany reports zero, something is wrong
+		// (maybe a read-only collection or an id-mismatch bug). Break
+		// to avoid an infinite loop.
+		if (batchDeleted === 0) {
+			ctx.log.warn("[emdash-forms] cascade-delete: 0 deleted in a batch, bailing", {
+				formId,
+				iter,
+			});
+			return deleted;
+		}
+	}
+
+	ctx.log.warn("[emdash-forms] cascade-delete hit MAX_ITERATIONS safety cap", {
+		formId,
+		deleted,
+	});
 	return deleted;
 }
