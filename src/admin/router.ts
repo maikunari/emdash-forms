@@ -18,6 +18,7 @@ import {
 	deleteSubmissionAction,
 	pauseFormAction,
 } from "./actions.js";
+import { buildFormEditPage } from "./pages/form-edit.js";
 import { buildFormNewPage, createFormAction } from "./pages/form-new.js";
 import { buildFormsListPage } from "./pages/forms-list.js";
 import {
@@ -206,6 +207,7 @@ export async function dispatchAdminInteraction(
 			case "form-new":
 				return buildFormNewPage();
 			case "form-edit":
+				return buildFormEditPage(pluginCtx, match.formId);
 			case "field-edit":
 			case "unknown":
 				return placeholder(match.kind);
