@@ -38,6 +38,12 @@ export async function buildFormsListPage(ctx: PluginContext): Promise<BlockRespo
 	const totalSubmissions = await submissions.count();
 	const unreadSubmissions = await submissions.count({ status: "new" });
 
+	// No-email-provider banner (SPEC §7.4 — the last ⚠). Checks whether
+	// any active form would attempt to send email + whether we have a
+	// provider. Only renders the banner when BOTH are true; no point
+	// pestering admins who deliberately run no-mail setups.
+	const providerBanner = await buildEmailProviderBanner(ctx, formResult.items);
+
 	const statsBlock = {
 		type: "stats",
 		stats: [
@@ -49,6 +55,7 @@ export async function buildFormsListPage(ctx: PluginContext): Promise<BlockRespo
 
 	const headerBlocks: unknown[] = [
 		{ type: "header", text: "Forms" },
+		...(providerBanner ? [providerBanner] : []),
 		statsBlock,
 		{
 			type: "actions",
@@ -129,14 +136,57 @@ function buildFormSubText(form: Form): string {
 }
 
 /**
+ * No-email-provider banner per SPEC-v1.md §7.4.
+ *
+ * Checks:
+ *  1. Any active form has notifyAdmin or confirmationEmail enabled?
+ *     (No need to pester admins who deliberately run no-mail forms.)
+ *  2. Is ctx.email absent? Absent = email:send capability granted
+ *     but no provider plugin (e.g. @emdash-cms/plugin-resend) is
+ *     configured to deliver.
+ *
+ * Both true → render the banner. Otherwise render nothing.
+ *
+ * ⚠ The "Install Resend" accessory links to a marketplace deep-link
+ * URL whose exact pattern isn't verifiable until the marketplace UI
+ * is public. The API at marketplace.emdashcms.com is confirmed; the
+ * /plugins/{id} UI path is a plausible guess that matches the CLI's
+ * verification checklist in SPEC §11.3. Follow-up issue tracks the
+ * verification once the UI ships.
+ */
+const RESEND_MARKETPLACE_URL = "https://marketplace.emdashcms.com/plugins/emdash-resend";
+
+async function buildEmailProviderBanner(
+	ctx: PluginContext,
+	formsList: ReadonlyArray<{ data: Form }>,
+): Promise<Record<string, unknown> | null> {
+	const anyWantsEmail = formsList.some(
+		({ data }) =>
+			data.status === "active" &&
+			(data.settings.notifications.notifyAdmin ||
+				data.settings.notifications.confirmationEmail),
+	);
+	if (!anyWantsEmail) return null;
+	if (ctx.email !== undefined) return null;
+
+	return {
+		type: "banner",
+		variant: "alert",
+		title: "Email notifications are disabled",
+		description:
+			"One or more forms want to send email but no provider plugin is installed. Submissions are still stored — admin + confirmation emails are silently skipped.",
+		accessory: {
+			type: "button",
+			text: "Install Resend",
+			url: RESEND_MARKETPLACE_URL,
+		},
+	};
+}
+
+/**
  * Overflow menu options for a form row. Action ids embed the form id
  * so the action handler can parse it via .slice() — matches the
  * pattern from sandboxed-test/sandbox-entry.ts:96.
- *
- * Note: "Edit" is included even though Phase 3 implements the form
- * builder. For Phase 2, clicking Edit falls through to the router's
- * placeholder (/forms/{id}). Easier to ship the UI option now than
- * add it to every forms-list render later.
  */
 function buildFormOverflowOptions(
 	formId: string,
