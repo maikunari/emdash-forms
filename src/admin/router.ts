@@ -12,6 +12,7 @@
 
 import type { PluginContext, RouteContext } from "emdash";
 
+import { buildFormsListPage } from "./pages/forms-list.js";
 import {
 	buildSettingsPage,
 	saveEmailSettings,
@@ -145,6 +146,7 @@ export async function dispatchAdminInteraction(
 			case "settings":
 				return buildSettingsPage(pluginCtx);
 			case "forms-list":
+				return buildFormsListPage(pluginCtx);
 			case "form-new":
 			case "form-edit":
 			case "field-edit":
