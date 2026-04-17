@@ -25,7 +25,20 @@ import type { PluginContext, StorageCollection } from "emdash";
 import { FIELD_ID_REGEX, parseOptions } from "./pages/field-edit.js";
 import { buildFieldEditPage } from "./pages/field-edit.js";
 import type { BlockResponse } from "./router.js";
-import type { Form, FormField, SelectField } from "../types.js";
+import type {
+	CheckboxField,
+	DateField,
+	Form,
+	FormField,
+	HiddenField,
+	MultiSelectField,
+	NumberField,
+	RadioField,
+	SelectField,
+	SelectOption,
+	TextInputField,
+	TextareaField,
+} from "../types.js";
 
 // ─── Shared save ─────────────────────────────────────────────────────
 
@@ -239,6 +252,308 @@ export async function saveFieldSelect(
 			type: "success",
 		},
 	};
+}
+
+// ─── Shared options-parse for select/multi_select/radio/checkbox ─────
+
+/**
+ * Parse + validate options text. Returns the parsed options or an
+ * error message. Callers check `result.error` before persisting.
+ */
+function parseOptionsStrict(
+	rawText: string,
+	{ allowEmpty }: { allowEmpty: boolean },
+): { options: SelectOption[] } | { error: string } {
+	const options = parseOptions(rawText);
+	if (options.length === 0 && !allowEmpty) {
+		return { error: "At least one option is required." };
+	}
+	const seen = new Set<string>();
+	for (const opt of options) {
+		if (seen.has(opt.value)) return { error: `Duplicate option value "${opt.value}".` };
+		seen.add(opt.value);
+	}
+	return { options };
+}
+
+// ─── TEXT_INPUT save ─────────────────────────────────────────────────
+
+export async function saveFieldTextInput(
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	values: Record<string, unknown>,
+): Promise<BlockResponse> {
+	return mutateTypeSpecific<TextInputField>(ctx, formId, fieldId, "text_input", (existing) => {
+		const rawInputType = typeof values.inputType === "string" ? values.inputType : "text";
+		const validTypes: TextInputField["inputType"][] = ["text", "email", "url", "tel"];
+		const inputType: TextInputField["inputType"] = (validTypes as string[]).includes(rawInputType)
+			? (rawInputType as TextInputField["inputType"])
+			: "text";
+		const maxLength = normalizePositive(values.maxLength);
+		const next: TextInputField = { ...existing, type: "text_input", inputType };
+		if (maxLength !== undefined) next.maxLength = maxLength;
+		else delete (next as { maxLength?: number }).maxLength;
+		return { field: next, toast: "Text settings saved" };
+	});
+}
+
+// ─── EMAIL save (no-op; present for router symmetry) ─────────────────
+
+export async function saveFieldEmail(
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+): Promise<BlockResponse> {
+	// Email has no type-specific settings. The save endpoint exists so
+	// the router's parse-once pattern covers all types uniformly; firing
+	// it is a no-op + info toast.
+	return {
+		...(await buildFieldEditPage(ctx, formId, fieldId)),
+		toast: { message: "No type-specific settings to save for email fields.", type: "info" },
+	};
+}
+
+// ─── TEXTAREA save ───────────────────────────────────────────────────
+
+export async function saveFieldTextarea(
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	values: Record<string, unknown>,
+): Promise<BlockResponse> {
+	return mutateTypeSpecific<TextareaField>(ctx, formId, fieldId, "textarea", (existing) => {
+		const rows = clamp(normalizePositive(values.rows) ?? 4, 1, 40);
+		const maxLength = normalizePositive(values.maxLength);
+		const next: TextareaField = { ...existing, type: "textarea", rows };
+		if (maxLength !== undefined) next.maxLength = maxLength;
+		else delete (next as { maxLength?: number }).maxLength;
+		return { field: next, toast: "Textarea settings saved" };
+	});
+}
+
+// ─── MULTI_SELECT save ───────────────────────────────────────────────
+
+export async function saveFieldMultiSelect(
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	values: Record<string, unknown>,
+): Promise<BlockResponse> {
+	return mutateTypeSpecific<MultiSelectField>(ctx, formId, fieldId, "multi_select", (existing) => {
+		const result = parseOptionsStrict(
+			typeof values.options === "string" ? values.options : "",
+			{ allowEmpty: false },
+		);
+		if ("error" in result) return { error: result.error };
+		const next: MultiSelectField = { ...existing, type: "multi_select", options: result.options };
+		return {
+			field: next,
+			toast: `Saved ${result.options.length} option${result.options.length === 1 ? "" : "s"}`,
+		};
+	});
+}
+
+// ─── RADIO save ──────────────────────────────────────────────────────
+
+export async function saveFieldRadio(
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	values: Record<string, unknown>,
+): Promise<BlockResponse> {
+	return mutateTypeSpecific<RadioField>(ctx, formId, fieldId, "radio", (existing) => {
+		const result = parseOptionsStrict(
+			typeof values.options === "string" ? values.options : "",
+			{ allowEmpty: false },
+		);
+		if ("error" in result) return { error: result.error };
+		const next: RadioField = { ...existing, type: "radio", options: result.options };
+		return {
+			field: next,
+			toast: `Saved ${result.options.length} option${result.options.length === 1 ? "" : "s"}`,
+		};
+	});
+}
+
+// ─── CHECKBOX save (options optional) ────────────────────────────────
+
+export async function saveFieldCheckbox(
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	values: Record<string, unknown>,
+): Promise<BlockResponse> {
+	return mutateTypeSpecific<CheckboxField>(ctx, formId, fieldId, "checkbox", (existing) => {
+		const result = parseOptionsStrict(
+			typeof values.options === "string" ? values.options : "",
+			{ allowEmpty: true },
+		);
+		if ("error" in result) return { error: result.error };
+		const next: CheckboxField = { ...existing, type: "checkbox" };
+		if (result.options.length > 0) {
+			next.options = result.options;
+		} else {
+			delete (next as { options?: SelectOption[] }).options;
+		}
+		return {
+			field: next,
+			toast:
+				result.options.length > 0
+					? `Saved ${result.options.length} option${result.options.length === 1 ? "" : "s"}`
+					: "Saved — rendering as a single boolean checkbox",
+		};
+	});
+}
+
+// ─── NUMBER save ─────────────────────────────────────────────────────
+
+export async function saveFieldNumber(
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	values: Record<string, unknown>,
+): Promise<BlockResponse> {
+	return mutateTypeSpecific<NumberField>(ctx, formId, fieldId, "number", (existing) => {
+		const min = normalizeOptionalNumber(values.min);
+		const max = normalizeOptionalNumber(values.max);
+		const step = normalizeOptionalNumber(values.step);
+		if (min !== undefined && max !== undefined && min > max) {
+			return { error: `Minimum (${min}) is greater than maximum (${max}).` };
+		}
+		if (step !== undefined && step < 0) {
+			return { error: "Step must be zero or positive." };
+		}
+		const next: NumberField = { ...existing, type: "number" };
+		if (min !== undefined) next.min = min;
+		else delete (next as { min?: number }).min;
+		if (max !== undefined) next.max = max;
+		else delete (next as { max?: number }).max;
+		if (step !== undefined && step > 0) next.step = step;
+		else delete (next as { step?: number }).step;
+		return { field: next, toast: "Number settings saved" };
+	});
+}
+
+// ─── DATE save ───────────────────────────────────────────────────────
+
+const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+export async function saveFieldDate(
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	values: Record<string, unknown>,
+): Promise<BlockResponse> {
+	return mutateTypeSpecific<DateField>(ctx, formId, fieldId, "date", (existing) => {
+		const min = typeof values.min === "string" ? values.min.trim() : "";
+		const max = typeof values.max === "string" ? values.max.trim() : "";
+		if (min.length > 0 && !ISO_DATE_REGEX.test(min)) {
+			return { error: `Earliest date "${min}" is not ISO (YYYY-MM-DD).` };
+		}
+		if (max.length > 0 && !ISO_DATE_REGEX.test(max)) {
+			return { error: `Latest date "${max}" is not ISO (YYYY-MM-DD).` };
+		}
+		if (min.length > 0 && max.length > 0 && min > max) {
+			return { error: `Earliest date (${min}) is after latest (${max}).` };
+		}
+		const next: DateField = { ...existing, type: "date" };
+		if (min.length > 0) next.min = min;
+		else delete (next as { min?: string }).min;
+		if (max.length > 0) next.max = max;
+		else delete (next as { max?: string }).max;
+		return { field: next, toast: "Date settings saved" };
+	});
+}
+
+// ─── HIDDEN save ─────────────────────────────────────────────────────
+
+export async function saveFieldHidden(
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	values: Record<string, unknown>,
+): Promise<BlockResponse> {
+	return mutateTypeSpecific<HiddenField>(ctx, formId, fieldId, "hidden", (existing) => {
+		const defaultValue = typeof values.defaultValue === "string" ? values.defaultValue : "";
+		const next: HiddenField = { ...existing, type: "hidden" };
+		if (defaultValue.length > 0) next.defaultValue = defaultValue;
+		else delete (next as { defaultValue?: string }).defaultValue;
+		return { field: next, toast: "Hidden field saved" };
+	});
+}
+
+// ─── Shared type-specific mutation scaffold ──────────────────────────
+
+/**
+ * Shared prologue for type-specific saves. Loads the form, confirms
+ * the field exists and has the expected type, calls the transform,
+ * persists, and re-renders.
+ */
+async function mutateTypeSpecific<TField extends FormField>(
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	expectedType: TField["type"],
+	transform: (existing: TField) =>
+		| { field: TField; toast: string }
+		| { error: string },
+): Promise<BlockResponse> {
+	const forms = ctx.storage.forms as StorageCollection<Form>;
+	const form = await forms.get(formId);
+	if (!form) return { blocks: [], toast: { message: "Form not found.", type: "error" } };
+	const idx = form.fields.findIndex((f) => f.id === fieldId);
+	if (idx === -1) {
+		return { blocks: [], toast: { message: "Field not found.", type: "error" } };
+	}
+	const existing = form.fields[idx]!;
+	if (existing.type !== expectedType) {
+		return withPage(ctx, formId, fieldId, {
+			message: `Field type changed to ${existing.type} — reload the editor.`,
+			type: "error",
+		});
+	}
+	const result = transform(existing as TField);
+	if ("error" in result) {
+		return withPage(ctx, formId, fieldId, { message: result.error, type: "error" });
+	}
+	const nextFields = [...form.fields];
+	nextFields[idx] = result.field;
+	await forms.put(formId, {
+		...form,
+		fields: nextFields,
+		updatedAt: new Date().toISOString(),
+	});
+	ctx.log.info("[emdash-forms] field type-specific saved", {
+		formId,
+		fieldId,
+		type: expectedType,
+	});
+	return {
+		...(await buildFieldEditPage(ctx, formId, fieldId)),
+		toast: { message: result.toast, type: "success" },
+	};
+}
+
+// ─── Number/positive parsing ─────────────────────────────────────────
+
+function normalizePositive(v: unknown): number | undefined {
+	const n = normalizeOptionalNumber(v);
+	if (n === undefined) return undefined;
+	return n > 0 ? Math.floor(n) : undefined;
+}
+
+function normalizeOptionalNumber(v: unknown): number | undefined {
+	if (typeof v === "number" && Number.isFinite(v) && v !== 0) return v;
+	if (typeof v === "string" && v.trim().length > 0) {
+		const parsed = Number(v);
+		if (Number.isFinite(parsed) && parsed !== 0) return parsed;
+	}
+	return undefined;
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+	return Math.min(Math.max(n, lo), hi);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────

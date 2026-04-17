@@ -26,7 +26,20 @@
 
 import type { PluginContext, StorageCollection } from "emdash";
 import type { BlockResponse } from "../router.js";
-import type { Form, FormField, SelectField, SelectOption } from "../../types.js";
+import type {
+	CheckboxField,
+	DateField,
+	FormField,
+	HiddenField,
+	MultiSelectField,
+	NumberField,
+	RadioField,
+	SelectField,
+	SelectOption,
+	TextInputField,
+	TextareaField,
+} from "../../types.js";
+import type { Form } from "../../types.js";
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -165,30 +178,319 @@ function buildTypeSpecificSection(
 	field: FormField,
 ): unknown[] {
 	switch (field.type) {
+		case "text_input":
+			return buildTextInputTypeSpecific(formId, fieldId, field);
+		case "email":
+			return buildEmailTypeSpecific();
+		case "textarea":
+			return buildTextareaTypeSpecific(formId, fieldId, field);
 		case "select":
 			return buildSelectTypeSpecific(formId, fieldId, field);
-		case "text_input":
-		case "email":
-		case "textarea":
 		case "multi_select":
+			return buildMultiSelectTypeSpecific(formId, fieldId, field);
 		case "checkbox":
+			return buildCheckboxTypeSpecific(formId, fieldId, field);
 		case "radio":
+			return buildRadioTypeSpecific(formId, fieldId, field);
 		case "number":
+			return buildNumberTypeSpecific(formId, fieldId, field);
 		case "date":
+			return buildDateTypeSpecific(formId, fieldId, field);
 		case "hidden":
-			// Commit 6 implements these. Placeholder for now so the page
-			// renders without crashing on non-select fields during the
-			// checkpoint review.
-			return [
-				{ type: "header", text: "Type-specific settings" },
-				{
-					type: "banner",
-					variant: "default",
-					title: "Type-specific settings coming next",
-					description: `Settings for "${field.type}" fields land in commit 6. The shared basics above are fully editable.`,
-				},
-			];
+			return buildHiddenTypeSpecific(formId, fieldId, field);
 	}
+}
+
+// ─── TEXT_INPUT ──────────────────────────────────────────────────────
+
+function buildTextInputTypeSpecific(
+	formId: string,
+	fieldId: string,
+	field: TextInputField,
+): unknown[] {
+	return [
+		{ type: "header", text: "Text input settings" },
+		{
+			type: "form",
+			block_id: "field-text_input",
+			fields: [
+				{
+					type: "select",
+					action_id: "inputType",
+					label: "Input type",
+					initial_value: field.inputType ?? "text",
+					options: [
+						{ label: "Text", value: "text" },
+						{ label: "Email", value: "email" },
+						{ label: "URL", value: "url" },
+						{ label: "Telephone", value: "tel" },
+					],
+					help_text:
+						"The underlying HTML input type. Affects keyboard on mobile and browser autofill. Use the `email` field type for proper validation + confirmation-email dispatch.",
+				},
+				{
+					type: "number_input",
+					action_id: "maxLength",
+					label: "Max length (optional)",
+					initial_value: field.maxLength ?? 0,
+					min: 0,
+					max: 100000,
+					help_text: "Leave at 0 for no limit.",
+				},
+			],
+			submit: { label: "Save text settings", action_id: `field_save_text_input:${formId}:${fieldId}` },
+		},
+	];
+}
+
+// ─── EMAIL ───────────────────────────────────────────────────────────
+
+function buildEmailTypeSpecific(): unknown[] {
+	return [
+		{ type: "header", text: "Email settings" },
+		{
+			type: "banner",
+			variant: "default",
+			title: "No type-specific settings",
+			description:
+				"Email fields use HTML5 validation. Submitter-email confirmation dispatch picks this field automatically if Notifications → confirmation email is enabled.",
+		},
+	];
+}
+
+// ─── TEXTAREA ────────────────────────────────────────────────────────
+
+function buildTextareaTypeSpecific(
+	formId: string,
+	fieldId: string,
+	field: TextareaField,
+): unknown[] {
+	return [
+		{ type: "header", text: "Textarea settings" },
+		{
+			type: "form",
+			block_id: "field-textarea",
+			fields: [
+				{
+					type: "number_input",
+					action_id: "rows",
+					label: "Rows",
+					initial_value: field.rows ?? 4,
+					min: 1,
+					max: 40,
+					help_text: "Visible height of the textarea. Doesn't cap the content length.",
+				},
+				{
+					type: "number_input",
+					action_id: "maxLength",
+					label: "Max length (optional)",
+					initial_value: field.maxLength ?? 0,
+					min: 0,
+					max: 100000,
+					help_text: "Leave at 0 for no limit.",
+				},
+			],
+			submit: { label: "Save textarea settings", action_id: `field_save_textarea:${formId}:${fieldId}` },
+		},
+	];
+}
+
+// ─── MULTI_SELECT / RADIO (same shape as SELECT) ─────────────────────
+
+function buildMultiSelectTypeSpecific(
+	formId: string,
+	fieldId: string,
+	field: MultiSelectField,
+): unknown[] {
+	return [
+		{ type: "header", text: "Multi-select options" },
+		{
+			type: "form",
+			block_id: "field-multi_select",
+			fields: [
+				{
+					type: "text_input",
+					action_id: "options",
+					label: "Options",
+					initial_value: serializeOptions(field.options),
+					multiline: true,
+					help_text:
+						"One option per line in the form `Label|value`. If you omit `|value`, the label is used as the value.",
+				},
+			],
+			submit: {
+				label: "Save options",
+				action_id: `field_save_multi_select:${formId}:${fieldId}`,
+			},
+		},
+	];
+}
+
+function buildRadioTypeSpecific(
+	formId: string,
+	fieldId: string,
+	field: RadioField,
+): unknown[] {
+	return [
+		{ type: "header", text: "Radio options" },
+		{
+			type: "form",
+			block_id: "field-radio",
+			fields: [
+				{
+					type: "text_input",
+					action_id: "options",
+					label: "Options",
+					initial_value: serializeOptions(field.options),
+					multiline: true,
+					help_text: "One option per line in the form `Label|value`.",
+				},
+			],
+			submit: { label: "Save options", action_id: `field_save_radio:${formId}:${fieldId}` },
+		},
+	];
+}
+
+// ─── CHECKBOX (options optional — boolean vs group) ──────────────────
+
+function buildCheckboxTypeSpecific(
+	formId: string,
+	fieldId: string,
+	field: CheckboxField,
+): unknown[] {
+	const current = field.options ?? [];
+	return [
+		{ type: "header", text: "Checkbox settings" },
+		{
+			type: "section",
+			text:
+				current.length === 0
+					? "_Currently rendering as a single boolean checkbox._ Add options below to render as a checkbox group instead."
+					: "_Currently rendering as a checkbox group._ Clear the options to render as a single boolean.",
+		},
+		{
+			type: "form",
+			block_id: "field-checkbox",
+			fields: [
+				{
+					type: "text_input",
+					action_id: "options",
+					label: "Options (optional)",
+					initial_value: serializeOptions(current),
+					multiline: true,
+					help_text:
+						"One option per line in the form `Label|value`. Leave blank for a single boolean checkbox.",
+				},
+			],
+			submit: { label: "Save checkbox settings", action_id: `field_save_checkbox:${formId}:${fieldId}` },
+		},
+	];
+}
+
+// ─── NUMBER ──────────────────────────────────────────────────────────
+
+function buildNumberTypeSpecific(
+	formId: string,
+	fieldId: string,
+	field: NumberField,
+): unknown[] {
+	return [
+		{ type: "header", text: "Number settings" },
+		{
+			type: "form",
+			block_id: "field-number",
+			fields: [
+				{
+					type: "number_input",
+					action_id: "min",
+					label: "Minimum (optional)",
+					initial_value: field.min ?? 0,
+					help_text: "Leave at 0 for no minimum.",
+				},
+				{
+					type: "number_input",
+					action_id: "max",
+					label: "Maximum (optional)",
+					initial_value: field.max ?? 0,
+					help_text: "Leave at 0 for no maximum.",
+				},
+				{
+					type: "number_input",
+					action_id: "step",
+					label: "Step (optional)",
+					initial_value: field.step ?? 0,
+					help_text: "Increment for browser up/down controls. Leave at 0 for 'any'.",
+				},
+			],
+			submit: { label: "Save number settings", action_id: `field_save_number:${formId}:${fieldId}` },
+		},
+	];
+}
+
+// ─── DATE ────────────────────────────────────────────────────────────
+
+function buildDateTypeSpecific(
+	formId: string,
+	fieldId: string,
+	field: DateField,
+): unknown[] {
+	return [
+		{ type: "header", text: "Date settings" },
+		{
+			type: "form",
+			block_id: "field-date",
+			fields: [
+				{
+					type: "text_input",
+					action_id: "min",
+					label: "Earliest allowed date (optional)",
+					initial_value: field.min ?? "",
+					placeholder: "YYYY-MM-DD",
+					help_text: "ISO date format. Leave blank for no lower bound.",
+				},
+				{
+					type: "text_input",
+					action_id: "max",
+					label: "Latest allowed date (optional)",
+					initial_value: field.max ?? "",
+					placeholder: "YYYY-MM-DD",
+					help_text: "ISO date format. Leave blank for no upper bound.",
+				},
+			],
+			submit: { label: "Save date settings", action_id: `field_save_date:${formId}:${fieldId}` },
+		},
+	];
+}
+
+// ─── HIDDEN ──────────────────────────────────────────────────────────
+
+function buildHiddenTypeSpecific(
+	formId: string,
+	fieldId: string,
+	field: HiddenField,
+): unknown[] {
+	return [
+		{ type: "header", text: "Hidden field" },
+		{
+			type: "section",
+			text:
+				"Hidden fields are always submitted with their default value. Commonly used for UTM source, referrer tracking, or static tenant IDs.",
+		},
+		{
+			type: "form",
+			block_id: "field-hidden",
+			fields: [
+				{
+					type: "text_input",
+					action_id: "defaultValue",
+					label: "Default value",
+					initial_value: field.defaultValue ?? "",
+					help_text: "Always included in the submission data unless a condition hides the field.",
+				},
+			],
+			submit: { label: "Save hidden settings", action_id: `field_save_hidden:${formId}:${fieldId}` },
+		},
+	];
 }
 
 // ─── SELECT prototype ────────────────────────────────────────────────

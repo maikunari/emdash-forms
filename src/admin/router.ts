@@ -24,7 +24,19 @@ import {
 	duplicateField,
 	moveField,
 } from "./field-actions.js";
-import { saveFieldSelect, saveFieldShared } from "./field-save.js";
+import {
+	saveFieldCheckbox,
+	saveFieldDate,
+	saveFieldEmail,
+	saveFieldHidden,
+	saveFieldMultiSelect,
+	saveFieldNumber,
+	saveFieldRadio,
+	saveFieldSelect,
+	saveFieldShared,
+	saveFieldTextInput,
+	saveFieldTextarea,
+} from "./field-save.js";
 import { buildFieldEditPage } from "./pages/field-edit.js";
 import {
 	createFormFromTemplate,
@@ -62,6 +74,39 @@ export interface BlockResponse {
 	blocks: readonly unknown[];
 	toast?: { message: string; type: "success" | "error" | "info" };
 }
+
+// ─── Field save handler dispatch table ───────────────────────────────
+//
+// Keyed by the `{kind}` in `field_save_{kind}:{formId}:{fieldId}`. The
+// `shared` handler covers the always-visible fields (type, id, label,
+// required, …). The other ten cover type-specific settings — one per
+// field type. Email's handler is a no-op (no type-specific settings)
+// but is present so the router's parse-once dispatch is uniform.
+
+type FieldSaveHandler = (
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	values: Record<string, unknown>,
+) => Promise<BlockResponse>;
+
+/** Email save takes no values; wrap to match FieldSaveHandler signature. */
+const saveFieldEmailAdapter: FieldSaveHandler = (ctx, formId, fieldId) =>
+	saveFieldEmail(ctx, formId, fieldId);
+
+const FIELD_SAVE_HANDLERS: Record<string, FieldSaveHandler> = {
+	shared: saveFieldShared,
+	text_input: saveFieldTextInput,
+	email: saveFieldEmailAdapter,
+	textarea: saveFieldTextarea,
+	select: saveFieldSelect,
+	multi_select: saveFieldMultiSelect,
+	checkbox: saveFieldCheckbox,
+	radio: saveFieldRadio,
+	number: saveFieldNumber,
+	date: saveFieldDate,
+	hidden: saveFieldHidden,
+};
 
 // ─── Page dispatcher ─────────────────────────────────────────────────
 
@@ -306,24 +351,17 @@ export async function dispatchAdminInteraction(
 			);
 		}
 
-		// Field editor save handlers — action ids carry both formId
-		// and fieldId. Parse the tail once.
-		if (
-			actionId.startsWith("field_save_shared:") ||
-			actionId.startsWith("field_save_select:")
-		) {
-			const [, tail] = actionId.split(/^field_save_(?:shared|select):/);
-			const firstColon = (tail ?? "").indexOf(":");
-			if (firstColon !== -1 && tail) {
-				const formId = tail.slice(0, firstColon);
-				const fieldId = tail.slice(firstColon + 1);
-				if (actionId.startsWith("field_save_shared:")) {
-					return saveFieldShared(pluginCtx, formId, fieldId, values);
-				}
-				if (actionId.startsWith("field_save_select:")) {
-					return saveFieldSelect(pluginCtx, formId, fieldId, values);
-				}
-			}
+		// Field editor save handlers — action ids follow
+		//   field_save_{kind}:{formId}:{fieldId}
+		// where kind ∈ { shared, text_input, email, textarea, select,
+		// multi_select, checkbox, radio, number, date, hidden }. The
+		// formId + fieldId are colon-delimited but fieldId can itself
+		// contain neither colons (per FIELD_ID_REGEX) nor slashes.
+		const fieldSaveMatch = /^field_save_([a-z_]+):([^:]+):(.+)$/.exec(actionId);
+		if (fieldSaveMatch) {
+			const [, kind, formId, fieldId] = fieldSaveMatch;
+			const dispatch = FIELD_SAVE_HANDLERS[kind!];
+			if (dispatch) return dispatch(pluginCtx, formId!, fieldId!, values);
 		}
 
 		return placeholder(`form_submit:${actionId}`);
