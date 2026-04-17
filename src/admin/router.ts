@@ -20,6 +20,11 @@ import {
 	saveTurnstileSettings,
 } from "./pages/settings.js";
 import {
+	buildSubmissionDetailPage,
+	markSubmissionRead,
+	markSubmissionUnread,
+} from "./pages/submission-detail.js";
+import {
 	buildSubmissionsListPage,
 	PAGINATION_ACTION_ID,
 } from "./pages/submissions-list.js";
@@ -155,10 +160,11 @@ export async function dispatchAdminInteraction(
 				return buildSubmissionsListPage(pluginCtx);
 			case "form-submissions":
 				return buildSubmissionsListPage(pluginCtx, { formId: match.formId });
+			case "submission-detail":
+				return buildSubmissionDetailPage(pluginCtx, match.submissionId);
 			case "form-new":
 			case "form-edit":
 			case "field-edit":
-			case "submission-detail":
 			case "unknown":
 				return placeholder(match.kind);
 		}
@@ -198,6 +204,18 @@ export async function dispatchAdminInteraction(
 		if (actionId.startsWith("navigate:")) {
 			const path = actionId.slice("navigate:".length);
 			return dispatchAdminInteraction(ctx, { type: "page_load", page: path });
+		}
+
+		// Submission row actions.
+		if (actionId.startsWith("submission:read:")) {
+			return markSubmissionRead(pluginCtx, actionId.slice("submission:read:".length));
+		}
+		if (actionId.startsWith("submission:unread:")) {
+			return markSubmissionUnread(pluginCtx, actionId.slice("submission:unread:".length));
+		}
+		if (actionId.startsWith("submission:view:")) {
+			const id = actionId.slice("submission:view:".length);
+			return buildSubmissionDetailPage(pluginCtx, id);
 		}
 
 		return placeholder(`block_action:${actionId}`);
