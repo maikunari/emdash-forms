@@ -19,6 +19,10 @@ import {
 	saveRetentionSettings,
 	saveTurnstileSettings,
 } from "./pages/settings.js";
+import {
+	buildSubmissionsListPage,
+	PAGINATION_ACTION_ID,
+} from "./pages/submissions-list.js";
 
 // ─── Block Kit response shapes (local) ───────────────────────────────
 //
@@ -147,11 +151,13 @@ export async function dispatchAdminInteraction(
 				return buildSettingsPage(pluginCtx);
 			case "forms-list":
 				return buildFormsListPage(pluginCtx);
+			case "submissions-list":
+				return buildSubmissionsListPage(pluginCtx);
+			case "form-submissions":
+				return buildSubmissionsListPage(pluginCtx, { formId: match.formId });
 			case "form-new":
 			case "form-edit":
 			case "field-edit":
-			case "form-submissions":
-			case "submissions-list":
 			case "submission-detail":
 			case "unknown":
 				return placeholder(match.kind);
@@ -172,9 +178,29 @@ export async function dispatchAdminInteraction(
 		return placeholder(`form_submit:${interaction.action_id ?? "unknown"}`);
 	}
 
-	// block_action → action handlers (Phase 2 fills these in)
+	// block_action → action handlers
 	if (interaction.type === "block_action") {
-		return placeholder(`block_action:${interaction.action_id ?? "unknown"}`);
+		const actionId = interaction.action_id ?? "";
+
+		// Pagination on submissions tables — cursor arrives as interaction.value.
+		if (actionId === PAGINATION_ACTION_ID) {
+			const cursor = typeof interaction.value === "string" ? interaction.value : undefined;
+			// We can't tell cross-form from per-form from the action id
+			// alone — the table lives on whichever page rendered it, and
+			// we route based on the current match.
+			if (match.kind === "form-submissions") {
+				return buildSubmissionsListPage(pluginCtx, { formId: match.formId, cursor });
+			}
+			return buildSubmissionsListPage(pluginCtx, { cursor });
+		}
+
+		// Simple navigation buttons: `navigate:{path}`.
+		if (actionId.startsWith("navigate:")) {
+			const path = actionId.slice("navigate:".length);
+			return dispatchAdminInteraction(ctx, { type: "page_load", page: path });
+		}
+
+		return placeholder(`block_action:${actionId}`);
 	}
 
 	return placeholder(`unhandled:${interaction.type ?? "unknown"}`);
