@@ -55,7 +55,7 @@ export async function buildFormsListPage(ctx: PluginContext): Promise<BlockRespo
 				{
 					type: "button",
 					text: "New form",
-					action_id: "form:new",
+					action_id: "navigate:/forms/new",
 					style: "primary",
 				},
 				{

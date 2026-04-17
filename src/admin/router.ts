@@ -18,6 +18,7 @@ import {
 	deleteSubmissionAction,
 	pauseFormAction,
 } from "./actions.js";
+import { buildFormNewPage, createFormAction } from "./pages/form-new.js";
 import { buildFormsListPage } from "./pages/forms-list.js";
 import {
 	buildSettingsPage,
@@ -203,6 +204,7 @@ export async function dispatchAdminInteraction(
 			case "submission-detail":
 				return buildSubmissionDetailPage(pluginCtx, match.submissionId);
 			case "form-new":
+				return buildFormNewPage();
 			case "form-edit":
 			case "field-edit":
 			case "unknown":
@@ -220,6 +222,8 @@ export async function dispatchAdminInteraction(
 				return saveRetentionSettings(pluginCtx, values);
 			case "save_settings_turnstile":
 				return saveTurnstileSettings(pluginCtx, values);
+			case "form_create":
+				return createFormAction(pluginCtx, values);
 		}
 		return placeholder(`form_submit:${interaction.action_id ?? "unknown"}`);
 	}
