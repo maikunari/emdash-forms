@@ -483,6 +483,232 @@ export async function saveFieldHidden(
 	});
 }
 
+// ─── CONDITION save ──────────────────────────────────────────────────
+
+/**
+ * Save handler for the conditional-visibility editor. Shared across
+ * all field types — operates on the shared `condition` prop.
+ *
+ * Validates:
+ *  - The referenced field exists in the form (not self, not missing)
+ *  - No circular dependency: A → B → A, or deeper cycles. We BFS the
+ *    condition graph from the saved field and fail if we loop back.
+ *    This is the "conditional logic loops" item on the SPEC §13.2
+ *    Phase 3 red team matrix.
+ *  - For "in" operator: at least one value in the comma-split
+ */
+export async function saveFieldCondition(
+	ctx: PluginContext,
+	formId: string,
+	fieldId: string,
+	values: Record<string, unknown>,
+): Promise<BlockResponse> {
+	const forms = ctx.storage.forms as StorageCollection<Form>;
+	const form = await forms.get(formId);
+	if (!form) {
+		return { blocks: [], toast: { message: "Form not found.", type: "error" } };
+	}
+	const idx = form.fields.findIndex((f) => f.id === fieldId);
+	if (idx === -1) {
+		return { blocks: [], toast: { message: "Field not found.", type: "error" } };
+	}
+	const existing = form.fields[idx]!;
+
+	const enabled = values.conditionEnabled === true;
+
+	// Disable path — drop the condition prop.
+	if (!enabled) {
+		if (existing.condition === undefined) {
+			return {
+				...(await buildFieldEditPage(ctx, formId, fieldId)),
+				toast: { message: "Condition already disabled", type: "info" },
+			};
+		}
+		const next = cloneFieldWithoutCondition(existing);
+		const nextFields = [...form.fields];
+		nextFields[idx] = next;
+		await forms.put(formId, { ...form, fields: nextFields, updatedAt: new Date().toISOString() });
+		return {
+			...(await buildFieldEditPage(ctx, formId, fieldId)),
+			toast: { message: "Condition removed", type: "success" },
+		};
+	}
+
+	// Enable path — validate the proposed condition.
+	const gateField = typeof values.conditionField === "string" ? values.conditionField : "";
+	const operator = typeof values.conditionOperator === "string" ? values.conditionOperator : "eq";
+	const rawValue = typeof values.conditionValue === "string" ? values.conditionValue : "";
+
+	if (gateField.length === 0) {
+		return withPage(ctx, formId, fieldId, {
+			message: "Pick a field to gate on.",
+			type: "error",
+		});
+	}
+	if (gateField === fieldId) {
+		// Defense-in-depth. The UI omits self from the select, but a
+		// crafted client could submit the current field's own id.
+		return withPage(ctx, formId, fieldId, {
+			message: "A field can't be conditional on itself.",
+			type: "error",
+		});
+	}
+	if (!form.fields.some((f) => f.id === gateField)) {
+		return withPage(ctx, formId, fieldId, {
+			message: `Field "${gateField}" doesn't exist in this form.`,
+			type: "error",
+		});
+	}
+	if (!["eq", "neq", "in"].includes(operator)) {
+		return withPage(ctx, formId, fieldId, {
+			message: `Unknown operator "${operator}".`,
+			type: "error",
+		});
+	}
+
+	// Build the proposed condition.
+	const proposed: import("../types.js").FieldCondition = { field: gateField };
+	if (operator === "in") {
+		const parts = rawValue
+			.split(",")
+			.map((s) => s.trim())
+			.filter((s) => s.length > 0);
+		if (parts.length === 0) {
+			return withPage(ctx, formId, fieldId, {
+				message: "Enter at least one value for 'is one of'.",
+				type: "error",
+			});
+		}
+		proposed.in = parts;
+	} else if (operator === "eq") {
+		proposed.eq = rawValue;
+	} else {
+		proposed.neq = rawValue;
+	}
+
+	// ── Loop detection ──────────────────────────────────────────
+	// Build a hypothetical graph with the proposed condition applied
+	// to the current field, then walk it from the current field and
+	// see if we reach ourselves. SPEC §13.2 Phase 3: "conditional
+	// logic loops (field A depends on B, B depends on A)."
+	const hypothetical = form.fields.map((f) =>
+		f.id === fieldId ? { ...f, condition: proposed } : f,
+	);
+	if (detectConditionCycle(fieldId, hypothetical)) {
+		return withPage(ctx, formId, fieldId, {
+			message:
+				"This condition creates a cycle. Field A can't depend on Field B while Field B depends on Field A.",
+			type: "error",
+		});
+	}
+
+	// Apply + persist.
+	const next = cloneFieldWithCondition(existing, proposed);
+	const nextFields = [...form.fields];
+	nextFields[idx] = next;
+	await forms.put(formId, { ...form, fields: nextFields, updatedAt: new Date().toISOString() });
+	ctx.log.info("[emdash-forms] field condition saved", {
+		formId,
+		fieldId,
+		gateField,
+		operator,
+	});
+	return {
+		...(await buildFieldEditPage(ctx, formId, fieldId)),
+		toast: { message: "Condition saved", type: "success" },
+	};
+}
+
+// ─── Cycle detection ─────────────────────────────────────────────────
+
+/**
+ * DFS from `start` through the condition graph. Returns true if we
+ * find a back-edge to `start`. Each field's condition creates a single
+ * outgoing edge to `condition.field`. A cycle means some field's
+ * visibility depends (transitively) on its own value.
+ */
+function detectConditionCycle(start: string, fields: FormField[]): boolean {
+	const byId = new Map<string, FormField>();
+	for (const f of fields) byId.set(f.id, f);
+
+	const visited = new Set<string>();
+	let current: string | undefined = start;
+	while (current !== undefined) {
+		const field = byId.get(current);
+		if (!field || !field.condition) return false;
+		const next = field.condition.field;
+		if (next === start) return true;
+		if (visited.has(next)) {
+			// A cycle that doesn't touch `start` isn't this field's
+			// fault. Let it go — the admin who introduced that other
+			// cycle would have been blocked when THEY saved.
+			return false;
+		}
+		visited.add(next);
+		current = next;
+	}
+	return false;
+}
+
+// ─── Condition clone helpers ─────────────────────────────────────────
+
+function cloneFieldWithoutCondition(field: FormField): FormField {
+	// Cleaner than a spread-with-delete because TS's narrowing prefers
+	// the switch here. Kept explicit to match mergeExistingFieldWithSharedProps.
+	const { condition: _dropped, ...rest } = field;
+	switch (field.type) {
+		case "text_input":
+			return { ...(rest as TextInputField), type: "text_input" };
+		case "email":
+			return { ...rest, type: "email" };
+		case "textarea":
+			return { ...(rest as TextareaField), type: "textarea" };
+		case "select":
+			return { ...(rest as SelectField), type: "select" };
+		case "multi_select":
+			return { ...(rest as MultiSelectField), type: "multi_select" };
+		case "checkbox":
+			return { ...(rest as CheckboxField), type: "checkbox" };
+		case "radio":
+			return { ...(rest as RadioField), type: "radio" };
+		case "number":
+			return { ...(rest as NumberField), type: "number" };
+		case "date":
+			return { ...(rest as DateField), type: "date" };
+		case "hidden":
+			return { ...(rest as HiddenField), type: "hidden" };
+	}
+}
+
+function cloneFieldWithCondition(
+	field: FormField,
+	condition: import("../types.js").FieldCondition,
+): FormField {
+	switch (field.type) {
+		case "text_input":
+			return { ...field, type: "text_input", condition };
+		case "email":
+			return { ...field, type: "email", condition };
+		case "textarea":
+			return { ...field, type: "textarea", condition };
+		case "select":
+			return { ...field, type: "select", condition };
+		case "multi_select":
+			return { ...field, type: "multi_select", condition };
+		case "checkbox":
+			return { ...field, type: "checkbox", condition };
+		case "radio":
+			return { ...field, type: "radio", condition };
+		case "number":
+			return { ...field, type: "number", condition };
+		case "date":
+			return { ...field, type: "date", condition };
+		case "hidden":
+			return { ...field, type: "hidden", condition };
+	}
+}
+
+
 // ─── Shared type-specific mutation scaffold ──────────────────────────
 
 /**

@@ -26,6 +26,7 @@ import {
 } from "./field-actions.js";
 import {
 	saveFieldCheckbox,
+	saveFieldCondition,
 	saveFieldDate,
 	saveFieldEmail,
 	saveFieldHidden,
@@ -96,6 +97,7 @@ const saveFieldEmailAdapter: FieldSaveHandler = (ctx, formId, fieldId) =>
 
 const FIELD_SAVE_HANDLERS: Record<string, FieldSaveHandler> = {
 	shared: saveFieldShared,
+	condition: saveFieldCondition,
 	text_input: saveFieldTextInput,
 	email: saveFieldEmailAdapter,
 	textarea: saveFieldTextarea,

@@ -91,8 +91,113 @@ export async function buildFieldEditPage(
 
 			// Type-specific form (delegates by type)
 			...buildTypeSpecificSection(formId, fieldId, field),
+			{ type: "divider" },
+
+			// Conditional visibility
+			...buildConditionSection(formId, fieldId, field, form.fields),
 		],
 	};
+}
+
+// ─── Conditional visibility editor ───────────────────────────────────
+//
+// Per SPEC-v1.md §3.3 FieldCondition + §6.3 client-side evaluation.
+// A field is visible iff its condition evaluates true (or no condition
+// is set). Available operators: eq, neq, in. "in" accepts a comma-
+// separated list of values.
+
+function buildConditionSection(
+	formId: string,
+	fieldId: string,
+	field: FormField,
+	siblings: FormField[],
+): unknown[] {
+	const cond = field.condition;
+	const isEnabled = cond !== undefined;
+	const operator: "eq" | "neq" | "in" =
+		cond?.eq !== undefined
+			? "eq"
+			: cond?.neq !== undefined
+				? "neq"
+				: cond?.in !== undefined
+					? "in"
+					: "eq";
+	const valueText =
+		cond?.eq !== undefined
+			? String(cond.eq)
+			: cond?.neq !== undefined
+				? String(cond.neq)
+				: cond?.in !== undefined
+					? cond.in.map(String).join(", ")
+					: "";
+
+	// Siblings minus self — the condition field can reference any other
+	// field in the form. A self-referencing condition makes no sense
+	// (the field can't gate its own visibility on its own value).
+	const siblingOptions = siblings
+		.filter((f) => f.id !== field.id)
+		.map((f) => ({ label: `${f.label} (${f.id})`, value: f.id }));
+
+	return [
+		{ type: "header", text: "Conditional visibility" },
+		{
+			type: "section",
+			text:
+				siblingOptions.length === 0
+					? "_Add another field to this form before setting a condition. A field needs a sibling to gate on._"
+					: isEnabled
+						? "_This field is only shown when the condition below evaluates to true. Evaluated client-side at form render + on every input change._"
+						: "_Enable the toggle below to hide this field unless another field has a specific value._",
+		},
+		{
+			type: "form",
+			block_id: "field-condition",
+			fields: [
+				{
+					type: "toggle",
+					action_id: "conditionEnabled",
+					label: "Enable conditional visibility",
+					initial_value: isEnabled,
+				},
+				{
+					type: "select",
+					action_id: "conditionField",
+					label: "Gate on field",
+					initial_value: cond?.field ?? (siblingOptions[0]?.value ?? ""),
+					options:
+						siblingOptions.length > 0
+							? siblingOptions
+							: [{ label: "(no other fields available)", value: "" }],
+					condition: { field: "conditionEnabled", eq: true },
+				},
+				{
+					type: "select",
+					action_id: "conditionOperator",
+					label: "Operator",
+					initial_value: operator,
+					options: [
+						{ label: "Equals", value: "eq" },
+						{ label: "Does not equal", value: "neq" },
+						{ label: "Is one of (comma-separated)", value: "in" },
+					],
+					condition: { field: "conditionEnabled", eq: true },
+				},
+				{
+					type: "text_input",
+					action_id: "conditionValue",
+					label: "Value",
+					initial_value: valueText,
+					help_text:
+						"For 'equals'/'does not equal': a single value. For 'is one of': a comma-separated list.",
+					condition: { field: "conditionEnabled", eq: true },
+				},
+			],
+			submit: {
+				label: "Save condition",
+				action_id: `field_save_condition:${formId}:${fieldId}`,
+			},
+		},
+	];
 }
 
 // ─── Shared fields (always visible) ──────────────────────────────────
