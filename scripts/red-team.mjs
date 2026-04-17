@@ -57,7 +57,14 @@ function makeCollection() {
 				});
 			}
 			const limit = opts.limit ?? 50;
-			return { items: items.slice(0, limit), hasMore: items.length > limit, cursor: undefined };
+			const offset = opts.cursor ? Number.parseInt(opts.cursor, 10) || 0 : 0;
+			const sliced = items.slice(offset, offset + limit);
+			const hasMore = items.length > offset + limit;
+			return {
+				items: sliced,
+				hasMore,
+				cursor: hasMore ? String(offset + limit) : undefined,
+			};
 		},
 		async count() {
 			return store.size;
@@ -468,6 +475,258 @@ await safe("retentionDays = 0 is clamped (no cleanup, no delete-all footgun)", a
 		ctx,
 	);
 	assert.equal(ctx.storage.submissions._store.size, 1, "no deletion when retentionDays <= 0");
+});
+
+// ═══ Phase 2 — Admin read path ═══════════════════════════════════════
+
+async function admin(ctx, interaction) {
+	return plugin.routes.admin.handler({
+		...ctx,
+		input: interaction,
+		request: new Request("http://localhost/admin", { method: "POST" }),
+		requestMeta: { ip: null, userAgent: null, referer: null, geo: null },
+	});
+}
+
+// ── Privilege-escalation surface check ──────────────────────────────
+
+await safe("admin route is NOT declared public: true", async () => {
+	// Platform auth middleware gates non-public routes. The most we can
+	// verify in a mock is that our route spec doesn't accidentally have
+	// public: true — the runtime middleware itself is out of scope.
+	assert.equal(plugin.routes.admin.public, undefined, "admin route must not be public");
+	assert.equal(plugin.routes["export/csv"].public, undefined, "export/csv must not be public");
+});
+
+await safe("submit + definition are declared public: true (by design)", async () => {
+	// Counterfoil: make sure the expected public routes ARE public, so
+	// a future refactor that accidentally gates them becomes visible.
+	assert.equal(plugin.routes.submit.public, true);
+	assert.equal(plugin.routes.definition.public, true);
+});
+
+// ── CSV formula injection coverage ──────────────────────────────────
+
+await safe("CSV export guards =, +, -, @, tab, and CR prefixes", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const contactId = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	)[0];
+
+	const payloads = {
+		"s-eq": "=SUM(A1)",
+		"s-plus": "+cmd|calc",
+		"s-minus": "-9*cmd",
+		"s-at": "@SUM(A)",
+		"s-tab": "\tSUM(A)",
+		"s-cr": "\rbad",
+	};
+	for (const [id, msg] of Object.entries(payloads)) {
+		await ctx.storage.submissions.put(id, {
+			formId: contactId,
+			data: { name: msg, email: "a@b.com", message: "x" },
+			meta: {},
+			status: "new",
+			createdAt: new Date().toISOString(),
+		});
+	}
+
+	const res = await plugin.routes["export/csv"].handler({
+		...ctx,
+		input: { formId: contactId },
+		request: new Request("http://localhost/export"),
+		requestMeta: { ip: null, userAgent: null, referer: null, geo: null },
+	});
+
+	// Every trigger char should appear with a leading ' prefix in the CSV.
+	// RFC 4180 wraps cells containing , " \r \n in quotes so matches
+	// may be inside "…" wrappers.
+	assert.ok(res.data.includes("'=SUM(A1)"), "= guard");
+	assert.ok(res.data.includes("'+cmd|calc"), "+ guard");
+	assert.ok(res.data.includes("'-9*cmd"), "- guard");
+	assert.ok(res.data.includes("'@SUM(A)"), "@ guard");
+	assert.ok(res.data.includes("'\tSUM(A)"), "tab guard");
+	assert.ok(res.data.includes("'\r"), "CR guard");
+});
+
+// ── Pagination cursor tampering ─────────────────────────────────────
+
+await safe("Pagination: malformed cursor renders error banner, doesn't crash", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+
+	// Override query to throw when it sees a malformed cursor — simulates
+	// real storage that rejects alien cursor strings.
+	const submissions = ctx.storage.submissions;
+	const origQuery = submissions.query.bind(submissions);
+	submissions.query = async (opts = {}) => {
+		if (opts.cursor === "TAMPERED") {
+			throw new Error("invalid cursor");
+		}
+		return origQuery(opts);
+	};
+
+	const res = await admin(ctx, {
+		type: "block_action",
+		action_id: "submissions:page",
+		value: "TAMPERED",
+	});
+
+	// Expect an error banner + Reload button, not a thrown error.
+	const banner = res.blocks.find((b) => b.type === "banner");
+	assert.ok(banner, "error banner rendered");
+	assert.equal(banner.variant, "error");
+});
+
+// ── Large result set stress test ────────────────────────────────────
+
+await safe("Large result set (10k submissions): forms list renders under 500ms", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const contactId = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	)[0];
+
+	// Seed 10k submissions synthetically.
+	for (let i = 0; i < 10_000; i++) {
+		await ctx.storage.submissions.put(`s-${i}`, {
+			formId: contactId,
+			data: { name: `n${i}`, email: `n${i}@x.com`, message: "m" },
+			meta: {},
+			status: i % 3 === 0 ? "new" : "read",
+			createdAt: new Date(Date.now() - i * 1000).toISOString(),
+		});
+	}
+
+	const start = Date.now();
+	const res = await admin(ctx, { type: "page_load", page: "/" });
+	const elapsed = Date.now() - start;
+
+	assert.ok(Array.isArray(res.blocks));
+	const stats = res.blocks.find((b) => b.type === "stats");
+	const subs = stats.stats.find((s) => s.label === "Submissions");
+	assert.equal(subs.value, "10000");
+
+	// In the in-memory mock, 10k is trivial; real D1 should also be
+	// fast for count() on a single-field index. 500ms is a soft ceiling
+	// to catch accidental O(n²) regressions.
+	assert.ok(elapsed < 500, `forms list took ${elapsed}ms (target < 500ms)`);
+});
+
+await safe("Large result set: paginated submissions page renders 25 rows in < 500ms", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const contactId = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	)[0];
+
+	for (let i = 0; i < 10_000; i++) {
+		await ctx.storage.submissions.put(`s-${i}`, {
+			formId: contactId,
+			data: { name: `n${i}`, email: `n${i}@x.com`, message: "m" },
+			meta: {},
+			status: "new",
+			createdAt: new Date(Date.now() - i * 1000).toISOString(),
+		});
+	}
+
+	const start = Date.now();
+	const res = await admin(ctx, { type: "page_load", page: "/submissions" });
+	const elapsed = Date.now() - start;
+
+	const table = res.blocks.find((b) => b.type === "table");
+	assert.equal(table.rows.length, 25, "paginated to PAGE_SIZE");
+	assert.ok(elapsed < 500, `submissions page took ${elapsed}ms (target < 500ms)`);
+});
+
+// ── XSS in field values rendered in admin UI ────────────────────────
+
+await safe("XSS payload in submission data is preserved verbatim (admin renderer escapes)", async () => {
+	// Platform concern: the Block Kit renderer is supposed to HTML-
+	// escape text in sections/tables/fields. We can't test the renderer
+	// here, but we CAN verify we don't pre-sanitize server-side — that
+	// would double-encode and also mask attacks during admin review.
+	// Store verbatim, render escaped at display time.
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+
+	const xss = "<img src=x onerror=alert(1)>";
+	await plugin.routes.submit.handler(
+		makeRouteCtx(ctx, {
+			formSlug: "contact",
+			data: { name: xss, email: "a@b.com", message: "m" },
+		}),
+	);
+	const subId = Array.from(ctx.storage.submissions._store.keys())[0];
+
+	const res = await admin(ctx, {
+		type: "page_load",
+		page: `/submissions/${subId}`,
+	});
+
+	const fieldsBlock = res.blocks
+		.filter((b) => b.type === "fields")
+		.find((b) => b.fields.some((f) => f.value === xss));
+	assert.ok(fieldsBlock, "raw value preserved in server response");
+});
+
+// ── Delete-form cascade correctness ─────────────────────────────────
+
+await safe("Delete form cascades to ALL submissions, even paginated ones", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	const contactId = Array.from(ctx.storage.forms._store.entries()).find(
+		([, f]) => f.slug === "contact",
+	)[0];
+
+	// Seed > CASCADE_BATCH_SIZE (500) to exercise pagination in the cascade.
+	for (let i = 0; i < 750; i++) {
+		await ctx.storage.submissions.put(`c-${i}`, {
+			formId: contactId,
+			data: {},
+			meta: {},
+			status: "new",
+			createdAt: new Date().toISOString(),
+		});
+	}
+
+	await admin(ctx, {
+		type: "block_action",
+		action_id: "form:menu:anything",
+		value: `form:delete:${contactId}`,
+	});
+
+	// None of the 750 contact submissions remain.
+	for (const [id, data] of ctx.storage.submissions._store) {
+		if (data.formId === contactId) {
+			throw new Error(`submission ${id} survived the cascade`);
+		}
+	}
+});
+
+// ── Double-delete idempotency ───────────────────────────────────────
+
+await safe("Double-delete of same submission is idempotent", async () => {
+	const ctx = makeCtx();
+	await plugin.hooks["plugin:install"].handler({}, ctx);
+	await plugin.routes.submit.handler(
+		makeRouteCtx(ctx, {
+			formSlug: "contact",
+			data: { name: "J", email: "a@b.com", message: "m" },
+		}),
+	);
+	const subId = Array.from(ctx.storage.submissions._store.keys())[0];
+
+	await admin(ctx, {
+		type: "block_action",
+		action_id: `submission:delete:${subId}`,
+	});
+	const res = await admin(ctx, {
+		type: "block_action",
+		action_id: `submission:delete:${subId}`,
+	});
+	assert.equal(res.toast.type, "info");
 });
 
 // ─── Summary ─────────────────────────────────────────────────────────
