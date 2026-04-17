@@ -19,7 +19,11 @@ export const HONEYPOT_FIELD = "_emdash_hp";
 export function isHoneypotTriggered(bodyOrData: Record<string, unknown>): boolean {
 	const value = bodyOrData[HONEYPOT_FIELD];
 	if (value === undefined || value === null) return false;
-	if (typeof value === "string") return value.trim().length > 0;
+	// Strict: any non-empty string triggers. Whitespace counts —
+	// a real user can't see or focus this field, so whitespace-only
+	// input is bot-or-script, not accessibility.
+	if (typeof value === "string") return value.length > 0;
+	// Non-string values (numbers, arrays, objects) also trigger.
 	return true;
 }
 
