@@ -1,10 +1,14 @@
 # emdash-forms — v1 Specification
 
-**Status:** blueprint. v1.0.0 target.
+**Status:** blueprint. v1.0.0 target. Revised post-Phase 0 (see Revision history below).
 **License:** MIT.
 **Scope:** This document covers v1 only. See the [Future](#future-v11-and-v2) section for anything deferred.
 
-> **⚠ Pending maintainer confirmation:** v1 assumes Standard/sandboxed plugins published to the marketplace can expose `public: true` routes. Sections that depend on this assumption are flagged with ⚠. If the answer comes back negative, the Routes, Site-side rendering, and Architecture sections need revision — the plugin's admin-side surface is unaffected.
+### Revision history
+
+- **Phase 0 (scaffold) resolved:** the `emdash plugin bundle` CLI accepts `public: true` routes on Standard-format plugins with no warnings — the pending-confirmation assumption held. ⚠ flags removed from §2, §4, §6.
+- **Phase 0 findings:** four places where the original spec assumed Native-format capabilities that aren't available to Standard plugins. Fixes inline in §2.1 (named export only), §3.1 (flat indexes only), §3.2 (manual settings via Block Kit + ctx.kv), §5 (`/settings` admin page added).
+- **Remaining ⚠:** §7.4 — marketplace deep-link URL pattern for `emdash-resend`. Verify once the marketplace UI is public.
 
 ---
 
@@ -22,10 +26,20 @@
 
 ## 2. Architecture
 
-**Plugin format.** Standard (sandboxable). Single `definePlugin()` default export. Block Kit admin. Marketplace-eligible via `emdash plugin publish`. No React, no custom Astro plugin components, no Portable Text blocks in v1.
+**Plugin format.** Standard (sandboxable). Block Kit admin. Marketplace-eligible via `emdash plugin publish`. No React, no custom Astro plugin components, no Portable Text blocks in v1.
 
-**Package structure.** As specified in the migration plan (Section 1.1). Two runtime entrypoints:
-- `./` — descriptor factory (`PluginDescriptor`), Vite build-time, side-effect-free.
+### 2.1 Module shape
+
+The descriptor factory in `./` is a **named export only** — `export function emdashForms()`. Do **not** add `export default emdashForms`.
+
+The `emdash plugin bundle` CLI has two manifest-extraction code paths. A `default`-function export takes the fast path that returns the descriptor as-is, skipping the backend-probe step that normalizes `hooks`/`routes` onto a `ResolvedPlugin`. Result: `extractManifest()` crashes on undefined `hooks`. Using only a named export forces the CLI onto the probe path. Matches the `@emdash-cms/plugin-sandboxed-test` reference.
+
+The `./sandbox` entry uses `export default definePlugin(...)` — this one's a default export because the CLI finds it via `.default` on the module.
+
+### 2.2 Package structure
+
+Two runtime entrypoints:
+- `./` — descriptor factory (`PluginDescriptor`), Vite build-time, side-effect-free. Named export only (see §2.1).
 - `./sandbox` — `definePlugin(...)` default export, runtime.
 - `./astro` — plain Astro component, not a plugin artifact.
 
@@ -61,8 +75,8 @@ No `write:media` in v1 (file upload deferred). No wildcard hosts — Turnstile i
 
 **Dependencies.**
 - Zero runtime dependencies beyond peerDeps.
-- `zod` for route input validation — peer-dep via `emdash` (not a direct dep).
-- Dev: `typescript`, `tsdown` (for bundling per `publishing.mdx`), `@types/astro`.
+- Zod for route input validation — imported from `astro/zod` (Astro re-exports Zod; no direct zod dep). Call signature in this release is `z.record(keySchema, valueSchema)` — Zod v4 shape.
+- Dev: `typescript`, `tsdown` (matches emdash workspace catalog version `^0.20.0`), `emdash`, `astro` (mirroring peers so local builds + types resolve).
 
 **Minimum EmDash version.** `^0.5.0`. Declared in `peerDependencies` and surfaced in the descriptor's `minEmdashVersion` field if supported (verify at bundle time).
 
@@ -72,6 +86,8 @@ No `write:media` in v1 (file upload deferred). No wildcard hosts — Turnstile i
 
 ### 3.1 Storage collections
 
+Declared in the descriptor (`./src/index.ts`). `StandardPluginDefinition` does not accept a `storage` field — storage lives on the descriptor only for Standard-format plugins.
+
 ```typescript
 storage: {
   forms: {
@@ -79,46 +95,57 @@ storage: {
     uniqueIndexes: ["slug"]
   },
   submissions: {
-    indexes: [
-      "formId",
-      "status",
-      "createdAt",
-      ["formId", "createdAt"],
-      ["formId", "status"]
-    ]
+    indexes: ["formId", "status", "createdAt"]
   }
 }
 ```
 
-### 3.2 Settings schema
+**Flat indexes only.** `PluginDescriptor.StorageCollectionDeclaration.indexes` is typed `string[]` — tuple/composite indexes (`["formId", "createdAt"]`) are a Native-format feature via `PluginDefinition<TStorage>` and are not available to Standard plugins. Per-form submission queries filter on `formId` and order by `createdAt` against the single-field index.
+
+Phase 2 will benchmark query performance on the list pages (per-form submissions ordered by createdAt). If single-field ordering becomes a bottleneck at realistic dataset sizes (~10k submissions), revisit in v1.1.
+
+### 3.2 Settings
+
+Standard-format plugins do not have auto-generated settings UI. `admin.settingsSchema` lives on the Native `PluginDefinition.admin` interface and is not accessible from the Standard `PluginDescriptor`. The `/settings` admin page is rendered manually via Block Kit and persists to `ctx.kv` with the `settings:` prefix. Pattern follows `@emdash-cms/plugin-webhook-notifier`.
+
+**Settings keys (all read from `ctx.kv.get<T>("settings:{key}")`):**
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `settings:defaultAdminEmail` | `string` | `""` | Recipient when a form doesn't specify one |
+| `settings:retentionDays` | `number` | `365` | Submissions older than this are deleted weekly (min 7, max 3650) |
+| `settings:turnstileSiteKey` | `string` | `""` | Optional; enables Turnstile site-side when set |
+| `settings:turnstileSecretKey` | `string` (encrypted via Block Kit `secret_input`) | `""` | Server-side verify secret |
+
+Defaults are seeded in `plugin:install` (§5 hook stubs in Phase 0; body in Phase 1).
+
+**`/settings` page shape** (Phase 2 implementation):
 
 ```typescript
-admin.settingsSchema = {
-  defaultAdminEmail: {
-    type: "string",
-    label: "Default admin email",
-    description: "Recipient when a form doesn't specify one."
-  },
-  retentionDays: {
-    type: "number",
-    label: "Submission retention (days)",
-    default: 365,
-    min: 7,
-    max: 3650
-  },
-  turnstileSiteKey: {
-    type: "string",
-    label: "Turnstile site key",
-    description: "Optional. Paste from dash.cloudflare.com to enable Turnstile."
-  },
-  turnstileSecretKey: {
-    type: "secret",
-    label: "Turnstile secret key"
-  }
-}
-```
+// Admin route, interaction.page === "/settings", type === "page_load"
+return {
+  blocks: [
+    { type: "header", text: "Settings" },
+    {
+      type: "form",
+      block_id: "settings",
+      fields: [
+        { type: "text_input",   action_id: "defaultAdminEmail", label: "Default admin email" },
+        { type: "number_input", action_id: "retentionDays",     label: "Retention (days)", initial_value: 365, min: 7, max: 3650 },
+        { type: "text_input",   action_id: "turnstileSiteKey",  label: "Turnstile site key (optional)" },
+        { type: "secret_input", action_id: "turnstileSecretKey", label: "Turnstile secret key" }
+      ],
+      submit: { label: "Save", action_id: "save_settings" }
+    }
+  ]
+};
 
-Read via `ctx.kv.get<T>("settings:{key}")`. Defaults persisted in `plugin:install`.
+// interaction.type === "form_submit", action_id === "save_settings"
+for (const [key, value] of Object.entries(interaction.values)) {
+  await ctx.kv.set(`settings:${key}`, value);
+}
+return { blocks: [/* re-render */], toast: { message: "Saved", type: "success" } };
+```
 
 ### 3.3 Type definitions
 
@@ -234,9 +261,9 @@ interface FormTemplate {
 
 ## 4. Routes
 
-All routes mounted at `/_emdash/api/plugins/emdash-forms/{routeName}`. Public routes are flagged ⚠ (see top of doc).
+All routes mounted at `/_emdash/api/plugins/emdash-forms/{routeName}`.
 
-### 4.1 `submit` ⚠ public
+### 4.1 `submit` (public)
 
 **Method:** POST (body) • **Auth:** none • **Route key:** `submit`
 
@@ -261,7 +288,7 @@ All routes mounted at `/_emdash/api/plugins/emdash-forms/{routeName}`. Public ro
 8. Send notifications (see §7). Failures logged, not propagated.
 9. Return `{ success: true, message: settings.successMessage, redirect?: mergedRedirectUrl }`.
 
-### 4.2 `definition` ⚠ public
+### 4.2 `definition` (public)
 
 **Method:** GET (query) • **Auth:** none • **Route key:** `definition`
 
@@ -317,15 +344,16 @@ Columns: `id`, `createdAt`, `status`, `ip`, then one column per unique field id 
 
 ## 5. Admin UI
 
-**Descriptor declares two top-level pages:**
+**Descriptor declares three top-level pages:**
 ```typescript
 adminPages: [
   { path: "/",            label: "Forms",       icon: "list" },
-  { path: "/submissions", label: "Submissions", icon: "inbox" }
+  { path: "/submissions", label: "Submissions", icon: "inbox" },
+  { path: "/settings",    label: "Settings",    icon: "settings" }
 ]
 ```
 
-Settings is auto-generated from `settingsSchema` (separate auto-page; not declared here).
+Settings is rendered manually by the admin dispatcher (see §3.2) since Standard plugins don't have auto-generated settings UI.
 
 ### 5.1 Page dispatcher
 
@@ -340,6 +368,7 @@ Inside the `admin` route, parse `interaction.page` against these patterns (in or
 | `/forms/{id}` | Form builder (edit) |
 | `/submissions` | All submissions |
 | `/submissions/{id}` | Submission detail |
+| `/settings` | Settings (form block per §3.2) |
 
 Unknown paths fall back to `/`.
 
@@ -455,14 +484,14 @@ interface EmDashFormProps {
 }
 ```
 
-### 6.2 Runtime behavior ⚠
+### 6.2 Runtime behavior
 
 Client-side script:
-1. On mount, GET `/_emdash/api/plugins/emdash-forms/definition?slug={slug}` ⚠.
+1. On mount, GET `/_emdash/api/plugins/emdash-forms/definition?slug={slug}`.
 2. Render fields into the DOM via a `renderField(field)` function per field type.
 3. Attach conditional-logic evaluator: on any field `change` / `input` event, re-evaluate all `condition` rules and toggle `display: none` on affected wrappers.
 4. If form's `spamProtection === "turnstile"` and a site key is available (prop or response), inject the Turnstile script and widget.
-5. On submit: prevent default, serialize form as JSON (multi-select collapses to array), POST to `action` (defaults to `/_emdash/api/plugins/emdash-forms/submit`) ⚠ with body `{ formSlug, data, "cf-turnstile-response"?, _emdash_hp }`. Content type is `application/json` only.
+5. On submit: prevent default, serialize form as JSON (multi-select collapses to array), POST to `action` (defaults to `/_emdash/api/plugins/emdash-forms/submit`) with body `{ formSlug, data, "cf-turnstile-response"?, _emdash_hp }`. Content type is `application/json` only.
 6. Handle response: show success message inline, honor `redirect` if present, show error with `errors[]` on validation failure, generic message on network error.
 
 **Content type.** The `submit` route accepts `application/json` only. Progressive enhancement (form-encoded fallback for JS-disabled clients) is explicitly out of scope for v1: the component renders fields client-side from the `definition` response, so there is no form to submit without JS. A v1.1 server-rendered fallback mode would add form-encoded acceptance — tracked in Future.
@@ -684,8 +713,7 @@ Minified. Tree-shaken. No Node built-ins — verified by the `emdash plugin bund
 
 ### 11.3 Marketplace submission checklist
 
-- [ ] `emdash plugin bundle` runs clean — no sandbox-incompat warnings
-- [ ] ⚠ If a warning fires on `routes: { submit: { public: true, ... } }`, escalate to Q1 before publishing
+- [ ] `emdash plugin bundle` runs clean — no sandbox-incompat warnings. Phase 0 confirmed this passes on a fresh build with `public: true` routes and no other features that trigger warnings.
 - [ ] Bundle size under 5 MB
 - [ ] Icon renders at 256×256 in the marketplace preview
 - [ ] Screenshots render at full resolution
