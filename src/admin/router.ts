@@ -19,6 +19,12 @@ import {
 	pauseFormAction,
 } from "./actions.js";
 import {
+	addField,
+	deleteField,
+	duplicateField,
+	moveField,
+} from "./field-actions.js";
+import {
 	createFormFromTemplate,
 	saveFormBehavior,
 	saveFormMetadata,
@@ -123,6 +129,52 @@ interface Interaction {
 }
 
 // ─── Placeholder builder ─────────────────────────────────────────────
+
+/**
+ * Dispatch a field-row action from the form-edit page. Value shape:
+ *   field:{action}:{formId}:{fieldId}
+ * where action ∈ { move_top, move_up, move_down, move_bottom, edit,
+ *                  duplicate, delete }.
+ */
+async function dispatchFieldOverflow(
+	ctx: PluginContext,
+	selected: string,
+): Promise<BlockResponse> {
+	// Parse: strip leading "field:", split off action, remaining is
+	// formId:fieldId (fieldId may contain internal underscores but not
+	// colons — our field id regex forbids them).
+	const withoutPrefix = selected.slice("field:".length);
+	const firstColon = withoutPrefix.indexOf(":");
+	if (firstColon === -1) return placeholder(`field-overflow:${selected}`);
+	const action = withoutPrefix.slice(0, firstColon);
+	const rest = withoutPrefix.slice(firstColon + 1);
+	const secondColon = rest.indexOf(":");
+	if (secondColon === -1) return placeholder(`field-overflow:${selected}`);
+	const formId = rest.slice(0, secondColon);
+	const fieldId = rest.slice(secondColon + 1);
+
+	switch (action) {
+		case "move_top":
+			return moveField(ctx, formId, fieldId, "top");
+		case "move_up":
+			return moveField(ctx, formId, fieldId, "up");
+		case "move_down":
+			return moveField(ctx, formId, fieldId, "down");
+		case "move_bottom":
+			return moveField(ctx, formId, fieldId, "bottom");
+		case "duplicate":
+			return duplicateField(ctx, formId, fieldId);
+		case "delete":
+			return deleteField(ctx, formId, fieldId);
+		case "edit":
+			return dispatchAdminInteraction(ctx, {
+				type: "page_load",
+				page: `/forms/${formId}/fields/${fieldId}`,
+			});
+		default:
+			return placeholder(`field-overflow:${action}`);
+	}
+}
 
 /**
  * Dispatch a form-row action — either the overflow-menu selected value
@@ -303,6 +355,27 @@ export async function dispatchAdminInteraction(
 			const templateId = typeof interaction.value === "string" ? interaction.value : "";
 			return createFormFromTemplate(pluginCtx, templateId);
 		}
+
+		// ── Field mutations on /forms/{id} ───────────────────────
+		// Add field: select action fires `form:field_add:{formId}`
+		// with the picked field type in interaction.value.
+		if (actionId.startsWith("form:field_add:")) {
+			const formId = actionId.slice("form:field_add:".length);
+			const type = typeof interaction.value === "string" ? interaction.value : "";
+			return addField(pluginCtx, formId, type);
+		}
+		// Field overflow menu: `form:field_menu:{formId}:{fieldId}`
+		// with a specific action in interaction.value.
+		if (actionId.startsWith("form:field_menu:")) {
+			const selected = typeof interaction.value === "string" ? interaction.value : "";
+			return dispatchFieldOverflow(pluginCtx, selected);
+		}
+		// Direct field:* action — used when a confirm dialog fires
+		// the underlying action id rather than going through the menu.
+		if (actionId.startsWith("field:")) {
+			return dispatchFieldOverflow(pluginCtx, actionId);
+		}
+
 		// Direct form:* actions (e.g. from confirm dialogs in future).
 		if (actionId.startsWith("form:")) {
 			return dispatchFormOverflow(pluginCtx, actionId);
